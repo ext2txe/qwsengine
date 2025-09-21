@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QMessageBox, QMenuBar, QMenu, QCheckBox
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
 from PySide6.QtCore import QStandardPaths, QUrl
 from PySide6.QtGui import QAction
 
@@ -142,12 +143,17 @@ class SettingsManager:
             "logging_enabled": True,
             "log_navigation": True,
             "log_tab_actions": True,
-            "log_errors": True
+            "log_errors": True,
+            "persist_cookies": True,
+            "persist_cache": True
         }
         self.settings = self.load_settings()
         
         # Initialize logging
         self.log_manager = LogManager(self.config_dir) if self.get("logging_enabled", True) else None
+        
+        # Setup persistent web profile
+        self.web_profile = self.setup_web_profile()
     
     def load_settings(self):
         """Load settings from JSON file or return defaults"""
@@ -212,6 +218,85 @@ class SettingsManager:
         """Log system event"""
         if self.log_manager:
             self.log_manager.log_system_event(event, details)
+    
+    def get_log_file_path(self):
+        """Get current log file path"""
+        if self.log_manager:
+            return self.log_manager.get_log_file_path()
+        return None
+    
+    def setup_web_profile(self):
+        """Setup persistent web profile for cookies and cache"""
+        try:
+            # Create profile data directory
+            profile_dir = self.config_dir / "profile"
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Create persistent profile with a specific name and storage path
+            profile = QWebEngineProfile("qwsengine_profile")
+            
+            # Set persistent storage path FIRST, before setting cookie policy
+            profile.setPersistentStoragePath(str(profile_dir))
+            
+            if self.get("persist_cookies", True):
+                # Set persistent cookie store
+                profile.setPersistentCookiesPolicy(QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies)
+                
+                if self.log_manager:
+                    self.log_manager.log(f"Persistent cookies enabled at: {profile_dir}", "SYSTEM")
+            else:
+                profile.setPersistentCookiesPolicy(QWebEngineProfile.PersistentCookiesPolicy.NoPersistentCookies)
+                if self.log_manager:
+                    self.log_manager.log("Persistent cookies disabled", "SYSTEM")
+            
+            if self.get("persist_cache", True):
+                # Set cache directory
+                cache_path = profile_dir / "cache"
+                cache_path.mkdir(exist_ok=True)
+                profile.setCachePath(str(cache_path))
+                
+                # Set reasonable cache size (100MB)
+                profile.setHttpCacheMaximumSize(100 * 1024 * 1024)
+                
+                if self.log_manager:
+                    self.log_manager.log(f"Persistent cache enabled at: {cache_path}", "SYSTEM")
+            
+            # Set download path
+            download_path = profile_dir / "downloads"
+            download_path.mkdir(exist_ok=True)
+            profile.setDownloadPath(str(download_path))
+            
+            # Enable offline storage
+            profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.DiskHttpCache)
+            
+            if self.log_manager:
+                self.log_manager.log(f"Web profile initialized - Storage: {profile_dir}", "SYSTEM")
+                self.log_manager.log(f"Storage path: {profile.persistentStoragePath()}", "SYSTEM")
+                self.log_manager.log(f"Cache path: {profile.cachePath()}", "SYSTEM")
+                
+                # Log actual Windows paths
+                self.log_manager.log(f"Config dir: {self.config_dir}", "SYSTEM")
+                self.log_manager.log(f"Profile dir exists: {profile_dir.exists()}", "SYSTEM")
+                
+                # Check what's in the profile directory
+                if profile_dir.exists():
+                    try:
+                        contents = list(profile_dir.iterdir())
+                        self.log_manager.log(f"Profile directory contents: {[str(p.name) for p in contents]}", "SYSTEM")
+                    except Exception as e:
+                        self.log_manager.log(f"Could not list profile directory: {e}", "SYSTEM")
+            
+            return profile
+            
+        except Exception as e:
+            if self.log_manager:
+                self.log_manager.log_error(f"Failed to setup web profile: {str(e)}")
+            # Return default profile if setup fails
+            return QWebEngineProfile.defaultProfile()
+
+    def get_web_profile(self):
+        """Get the configured web profile"""
+        return self.web_profile
     
     def get_log_file_path(self):
         """Get current log file path"""
@@ -284,6 +369,33 @@ class SettingsDialog(QDialog):
         
         layout.addLayout(logging_layout)
         
+        # Browser data settings
+        browser_layout = QVBoxLayout()
+        browser_layout.addWidget(QLabel("Browser Data Options:"))
+        
+        self.persist_cookies = QCheckBox("Persist Cookies (remember logins)")
+        self.persist_cookies.setChecked(self.settings_manager.get("persist_cookies", True))
+        browser_layout.addWidget(self.persist_cookies)
+        
+        self.persist_cache = QCheckBox("Persist Cache (faster page loading)")
+        self.persist_cache.setChecked(self.settings_manager.get("persist_cache", True))
+        browser_layout.addWidget(self.persist_cache)
+        
+        # Clear data button
+        clear_data_button = QPushButton("Clear All Browser Data")
+        clear_data_button.clicked.connect(self.clear_browser_data)
+        clear_data_button.setToolTip("Clear cookies, cache, and all stored browser data")
+        browser_layout.addWidget(clear_data_button)
+        
+        layout.addLayout(browser_layout)
+        
+        # Log file info
+        if self.settings_manager.get_log_file_path():
+            log_info = QLabel(f"Log file: {self.settings_manager.get_log_file_path()}")
+            log_info.setStyleSheet("color: gray; font-size: 9px;")
+            log_info.setWordWrap(True)
+            layout.addWidget(log_info)
+        
         # Log file info
         if self.settings_manager.get_log_file_path():
             log_info = QLabel(f"Log file: {self.settings_manager.get_log_file_path()}")
@@ -292,7 +404,7 @@ class SettingsDialog(QDialog):
             layout.addWidget(log_info)
         
         # Info label
-        info_label = QLabel("Settings are automatically saved. Logging changes require restart.")
+        info_label = QLabel("Settings are automatically saved. Browser data changes require restart.")
         info_label.setStyleSheet("color: gray; font-size: 10px;")
         layout.addWidget(info_label)
         
@@ -318,6 +430,18 @@ class SettingsDialog(QDialog):
         button_layout.addWidget(save_button)
         layout.addLayout(button_layout)
     
+    def clear_browser_data(self):
+        """Clear all browser data"""
+        reply = QMessageBox.question(self, "Clear Browser Data", 
+                                   "This will delete all cookies, cache, and stored data. Continue?",
+                                   QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            if self.settings_manager.clear_browser_data():
+                QMessageBox.information(self, "Data Cleared", 
+                                      "Browser data cleared successfully! Restart the application to see changes.")
+            else:
+                QMessageBox.warning(self, "Clear Failed", "Failed to clear browser data.")
+    
     def reset_to_defaults(self):
         """Reset all settings to default values"""
         self.url_input.setText("https://flanq.com")
@@ -327,6 +451,8 @@ class SettingsDialog(QDialog):
         self.log_navigation.setChecked(True)
         self.log_tab_actions.setChecked(True)
         self.log_errors.setChecked(True)
+        self.persist_cookies.setChecked(True)
+        self.persist_cache.setChecked(True)
     
     def save_settings(self):
         """Validate and save settings"""
@@ -359,6 +485,8 @@ class SettingsDialog(QDialog):
             self.settings_manager.set("log_navigation", self.log_navigation.isChecked())
             self.settings_manager.set("log_tab_actions", self.log_tab_actions.isChecked())
             self.settings_manager.set("log_errors", self.log_errors.isChecked())
+            self.settings_manager.set("persist_cookies", self.persist_cookies.isChecked())
+            self.settings_manager.set("persist_cache", self.persist_cache.isChecked())
             
             # Save to file
             if self.settings_manager.save_settings():
@@ -414,8 +542,22 @@ class BrowserTab(QWidget):
         controls_layout.addWidget(go_button)
         controls_layout.addWidget(new_tab_button)
 
-        # Browser view
+        # Browser view with persistent profile
+        # Create a page with the persistent profile first
+        profile = self.settings_manager.get_web_profile()
+        page = QWebEnginePage(profile, self)
         self.browser = QWebEngineView()
+        self.browser.setPage(page)
+        
+        # Add cookie debugging
+        if self.settings_manager.get("logging_enabled", True):
+            # Log when cookies are added/changed
+            try:
+                cookie_store = profile.cookieStore()
+                cookie_store.cookieAdded.connect(lambda cookie: 
+                    self.settings_manager.log(f"Cookie added: {cookie.name().data().decode()} for {cookie.domain()}", "SYSTEM"))
+            except Exception as e:
+                self.settings_manager.log_error(f"Could not setup cookie debugging: {str(e)}")
         
         # Connect signals before loading
         self.browser.titleChanged.connect(self.update_tab_title)
@@ -554,6 +696,13 @@ class BrowserWindow(QWidget):
         
         file_menu.addSeparator()
         
+        # Add clear browser data action
+        clear_data_action = QAction("Clear Browser Data...", self)
+        clear_data_action.triggered.connect(self.clear_browser_data)
+        file_menu.addAction(clear_data_action)
+        
+        file_menu.addSeparator()
+        
         exit_action = QAction("Exit", self)
         exit_action.setShortcut("Ctrl+Q")
         exit_action.triggered.connect(self.close)
@@ -576,13 +725,31 @@ class BrowserWindow(QWidget):
     
     def open_settings(self):
         """Open settings dialog"""
-        self.settings_manager.log_system_event("Settings dialog opened")
-        dialog = SettingsDialog(self, self.settings_manager)
-        result = dialog.exec()
-        if result == QDialog.Accepted:
-            self.settings_manager.log_system_event("Settings saved")
-        else:
-            self.settings_manager.log_system_event("Settings dialog cancelled")
+        try:
+            self.settings_manager.log_system_event("Settings dialog opening...")
+            dialog = SettingsDialog(self, self.settings_manager)
+            self.settings_manager.log_system_event("Settings dialog created")
+            result = dialog.exec()
+            if result == QDialog.Accepted:
+                self.settings_manager.log_system_event("Settings saved")
+            else:
+                self.settings_manager.log_system_event("Settings dialog cancelled")
+        except Exception as e:
+            self.settings_manager.log_error(f"Failed to open settings dialog: {str(e)}")
+            QMessageBox.critical(self, "Error", f"Failed to open settings: {str(e)}")
+    
+    def clear_browser_data(self):
+        """Clear all browser data from menu"""
+        reply = QMessageBox.question(self, "Clear Browser Data", 
+                                   "This will delete all cookies, cache, downloads, and stored data. Continue?",
+                                   QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            if self.settings_manager.clear_browser_data():
+                QMessageBox.information(self, "Data Cleared", 
+                                      "Browser data cleared successfully! Please restart the application.")
+                self.settings_manager.log_system_event("Browser data cleared via menu")
+            else:
+                QMessageBox.warning(self, "Clear Failed", "Failed to clear browser data.")
     
     def view_logs(self):
         """Open log file location"""
