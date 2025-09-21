@@ -14,6 +14,28 @@ from PySide6.QtCore import QStandardPaths, QUrl
 from PySide6.QtGui import QAction
 
 
+class CustomFileHandler(logging.Handler):
+    """Custom logging handler that opens and closes file for each write"""
+    
+    def __init__(self, log_file):
+        super().__init__()
+        self.log_file = log_file
+        
+    def emit(self, record):
+        try:
+            # Format the record
+            msg = self.format(record)
+            
+            # Open file, write, and immediately close
+            with open(self.log_file, 'a', encoding='utf-8') as f:
+                f.write(msg + '\n')
+                f.flush()  # Ensure data is written to disk
+                
+        except Exception:
+            # If logging fails, we don't want to crash the app
+            pass
+
+
 class LogManager:
     def __init__(self, config_dir):
         self.config_dir = Path(config_dir)
@@ -28,7 +50,7 @@ class LogManager:
         self.log("Application starting", "SYSTEM")
     
     def setup_logging(self):
-        """Configure Python logging"""
+        """Configure Python logging with custom handler that closes file after each write"""
         # Create custom formatter
         class QWSEngineFormatter(logging.Formatter):
             def format(self, record):
@@ -43,8 +65,8 @@ class LogManager:
         for handler in self.logger.handlers[:]:
             self.logger.removeHandler(handler)
         
-        # File handler
-        file_handler = logging.FileHandler(self.log_file, encoding='utf-8')
+        # Custom file handler that closes file after each write
+        file_handler = CustomFileHandler(self.log_file)
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(QWSEngineFormatter())
         
