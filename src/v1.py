@@ -207,7 +207,7 @@ class SettingsDialog(QDialog):
     def setup_ui(self):
         self.setWindowTitle("QWSEngine Settings")
         self.setModal(True)
-        self.resize(500, 300)
+        self.resize(500, 400)
         
         layout = QVBoxLayout(self)
         
@@ -601,25 +601,7 @@ class BrowserWindow(QWidget):
     def closeEvent(self, event):
         """Called when application is closing"""
         self.settings_manager.log_system_event("Application shutting down")
-        super().closeEvent(event)_new_tab(self):
-        """Create a new tab (called from menu)"""
-        new_tab = BrowserTab(self.tabs, settings_manager=self.settings_manager)
-        index = self.tabs.addTab(new_tab, "New Tab")
-        self.tabs.setCurrentIndex(index)
-    
-    def open_settings(self):
-        """Open settings dialog"""
-        dialog = SettingsDialog(self, self.settings_manager)
-        dialog.exec()
-    
-    def close_tab(self, index):
-        if self.tabs.count() > 1:
-            widget = self.tabs.widget(index)
-            widget.deleteLater()
-            self.tabs.removeTab(index)
-        else:
-            # Close application if last tab is closed
-            self.close()
+        super().closeEvent(event)
 
 
 if __name__ == "__main__":
