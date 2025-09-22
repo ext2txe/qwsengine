@@ -1,6 +1,7 @@
 import os
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QTabWidget, QMenuBar, QMessageBox, QToolBar, QStatusBar
-from PySide6.QtGui import QAction
+from PySide6.QtCore import QTimer, QRect
+from PySide6.QtGui import QImage, QPainter, QAction
 from PySide6.QtWidgets import QDialog
 from datetime import datetime
 from .settings import SettingsManager
@@ -58,6 +59,11 @@ class BrowserWindow(QWidget):
         save_shot_action.triggered.connect(self.save_current_tab_screenshot)
         tb.addAction(save_shot_action)
 
+        save_full_action = QAction("Save Full Page", self)
+        save_full_action.setToolTip("Capture the entire page (beyond viewport) as PNG")
+        save_full_action.triggered.connect(self.save_full_page_screenshot)
+        tb.addAction(save_full_action)
+        
         return tb
 
     def save_current_tab_html(self):
@@ -130,6 +136,199 @@ class BrowserWindow(QWidget):
 
         except Exception as e:
             self.show_status(f"Screenshot failed: {e}", level="ERROR")
+
+    def save_full_page_screenshot(self):
+        """Capture the entire scrollable page to a single PNG (stitched tiles)."""
+        try:
+            current = self.tabs.currentWidget()
+            if not current:
+                self.show_status("No active tab to capture.", level="WARNING")
+                return
+            if hasattr(current, "is_loaded") and not current.is_loaded():
+                self.show_status("Page still loading… try again when it finishes.", level="WARNING")
+                return
+
+            page = current.browser.page()
+
+            # Where to save
+            save_dir = self.settings_manager.config_dir / "save"
+            save_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            title = current.browser.title() or current.browser.url().host() or "page"
+            safe_title = "".join(ch for ch in title if ch.isalnum() or ch in ("-", "_")).strip() or "page"
+            target = save_dir / f"{ts}_{safe_title}_fullpage.png"
+
+            # Disallow re-entry
+            if getattr(self, "_fps_busy", False):
+                self.show_status("Full-page capture already in progress…", level="WARNING")
+                return
+            self._fps_busy = True
+            self._fps_target = target
+            self._fps_tab = current
+
+            # Ask page for metrics
+            js = """
+                (() => {
+                const e = document.documentElement;
+                const b = document.body || {scrollWidth:0,scrollHeight:0};
+                const totalWidth = Math.max(e.scrollWidth, b.scrollWidth);
+                const totalHeight = Math.max(e.scrollHeight, b.scrollHeight);
+                const viewportWidth = window.innerWidth;
+                const viewportHeight = window.innerHeight;
+                const dpr = window.devicePixelRatio || 1;
+                return {totalWidth, totalHeight, viewportWidth, viewportHeight, dpr};
+                })()
+            """
+            self.show_status("Measuring page for full capture…", level="INFO")
+            page.runJavaScript(js, self._fps_start)
+
+        except Exception as e:
+            self._fps_fail(f"Full-page capture failed: {e}")
+            self._fps_reset()
+
+    def _fps_start(self, metrics):
+        """Initialize stitching based on JS metrics and kick off the first tile."""
+        try:
+            if not metrics:
+                self._fps_fail("Could not read page metrics.")
+                self._fps_reset()
+                return
+
+            tw = int(metrics.get("totalWidth", 0))
+            th = int(metrics.get("totalHeight", 0))
+            vw = int(metrics.get("viewportWidth", 0))
+            vh = int(metrics.get("viewportHeight", 0))
+            dpr = float(metrics.get("dpr", 1.0))
+
+            if not (tw and th and vw and vh):
+                self._fps_fail("Invalid page metrics.")
+                self._fps_reset()
+                return
+
+            # Prepare destination image in *device pixels*
+            w_px = int(tw * dpr)
+            h_px = int(th * dpr)
+            self._fps_img = QImage(w_px, h_px, QImage.Format_ARGB32)
+            self._fps_img.fill(0)  # transparent background
+            self._fps_painter = QPainter(self._fps_img)
+
+            # Build tile list covering the page (left-to-right, top-to-bottom)
+            cols = (tw + vw - 1) // vw
+            rows = (th + vh - 1) // vh
+            positions = []
+            for r in range(rows):
+                for c in range(cols):
+                    x = c * vw
+                    y = r * vh
+                    positions.append((x, y))
+            self._fps_positions = positions
+            self._fps_dpr = dpr
+            self._fps_vw = vw
+            self._fps_vh = vh
+            self._fps_tw = tw
+            self._fps_th = th
+
+            self.show_status(f"Capturing full page {tw}×{th}px ({len(positions)} tiles)…", level="INFO")
+            self._fps_next_tile()
+
+        except Exception as e:
+            self._fps_fail(f"Init error: {e}")
+            self._fps_reset()
+
+    def _fps_next_tile(self):
+        """Scroll to next tile and schedule a grab of the visible widget."""
+        try:
+            if not self._fps_positions:
+                self._fps_finish()
+                return
+
+            x, y = self._fps_positions.pop(0)
+            # Progress ping
+            total = (self._fps_tw + self._fps_vh - 1) // self._fps_vh * ((self._fps_tw + self._fps_vw - 1) // self._fps_vw)
+            done = total - len(self._fps_positions)
+            self.show_status(f"Capturing tile {done}/{total}…", level="INFO")
+
+            js_scroll = f"window.scrollTo({x}, {y}); true;"
+            page = self._fps_tab.browser.page()
+            page.runJavaScript(js_scroll, lambda _: QTimer.singleShot(120, lambda: self._fps_grab_tile(x, y)))
+
+        except Exception as e:
+            self._fps_fail(f"Tile error: {e}")
+            self._fps_reset()
+
+    def _fps_grab_tile(self, x, y):
+        """Grab current viewport and paint it to the stitched image at (x,y)."""
+        try:
+            view = self._fps_tab.browser
+            pm = view.grab()  # QPixmap of *visible* widget
+
+            if pm.isNull():
+                self._fps_fail("Grabbed empty frame.")
+                self._fps_reset()
+                return
+
+            # Convert to QImage in device pixels (neutralize devicePixelRatio for reliable math)
+            try:
+                pm.setDevicePixelRatio(1.0)
+            except Exception:
+                pass
+            img = pm.toImage()
+
+            dpr = self._fps_dpr
+            vw, vh = self._fps_vw, self._fps_vh
+            tw, th = self._fps_tw, self._fps_th
+
+            dest_x = int(x * dpr)
+            dest_y = int(y * dpr)
+
+            # Visible pixmap in *device pixels*
+            src_w = img.width()
+            src_h = img.height()
+
+            # Clip on right/bottom edges (last tiles)
+            remain_w = int(tw * dpr) - dest_x
+            remain_h = int(th * dpr) - dest_y
+            copy_w = src_w if src_w < remain_w else remain_w
+            copy_h = src_h if src_h < remain_h else remain_h
+
+            if copy_w > 0 and copy_h > 0:
+                self._fps_painter.drawImage(
+                    QRect(dest_x, dest_y, copy_w, copy_h),
+                    img,
+                    QRect(0, 0, copy_w, copy_h)
+                )
+
+            # Next tile
+            self._fps_next_tile()
+
+        except Exception as e:
+            self._fps_fail(f"Grab error: {e}")
+            self._fps_reset()
+
+    def _fps_finish(self):
+        """All tiles captured: finalize and save."""
+        try:
+            self._fps_painter.end()
+            ok = self._fps_img.save(str(self._fps_target), "PNG")
+            if not ok:
+                self._fps_fail("Failed to save stitched image.")
+            else:
+                self.show_status(f"Saved Full Page → {self._fps_target}", level="INFO")
+        except Exception as e:
+            self._fps_fail(f"Save error: {e}")
+        finally:
+            self._fps_reset()
+
+    def _fps_fail(self, msg: str):
+        self.show_status(msg, level="ERROR")
+
+    def _fps_reset(self):
+        # Clean up capture state
+        for attr in ("_fps_busy", "_fps_img", "_fps_painter", "_fps_positions", "_fps_dpr",
+                    "_fps_vw", "_fps_vh", "_fps_tw", "_fps_th", "_fps_target", "_fps_tab"):
+            if hasattr(self, attr):
+                setattr(self, attr, None)
+        self._fps_busy = False
 
     def _create_menu_bar(self):
         menu_bar = QMenuBar()

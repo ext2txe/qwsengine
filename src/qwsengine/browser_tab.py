@@ -11,6 +11,7 @@ from .settings import SettingsManager  # type: ignore
 class BrowserTab(QWidget):
     _tab_counter = 0
 
+   
     loadStarted = Signal(str)               #url
     loadFinished = Signal(str, bool, str)   #url, success, title
 
