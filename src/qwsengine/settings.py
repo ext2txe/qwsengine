@@ -25,6 +25,7 @@ class SettingsManager:
             "window_maximized": False,
             "window_fullscreen": False,        
             "window_normal_rect": None,   # NEW: [x, y, w, h],        
+            "user_agent": "",       #empty = use default UA
         }
         self.settings = self._load_settings()
 
@@ -93,11 +94,47 @@ class SettingsManager:
             return self.log_manager.get_log_file_path()
         return None
 
+    # ---------------- User Agent  ----------------
+    def apply_user_agent(self) -> None:
+        """Apply the configured UA immediately to the current profile."""
+        try:
+            profile = self.get_web_profile()
+            ua = self.get("user_agent", "").strip()
+            if ua:
+                profile.setHttpUserAgent(ua)
+                self.log_system_event("Custom User-Agent applied", ua)
+            else:
+                # Reset to original default UA captured at startup
+                default_ua = getattr(self, "initial_user_agent", profile.httpUserAgent())
+                profile.setHttpUserAgent(default_ua)
+                self.log_system_event("User-Agent reset to default", default_ua)
+        except Exception as e:
+            self.log_error(f"apply_user_agent failed: {e}")
+
+    def get_user_agent(self) -> str:
+        try:
+            return self.get_web_profile().httpUserAgent()
+        except Exception:
+            return self.get("user_agent", "") or ""
+
+
     # ---------------- Web Profile ----------------
     def _setup_web_profile(self):
         try:
             profile_dir = self.config_dir / "profile"
             profile_dir.mkdir(parents=True, exist_ok=True)
+
+            # Capture the default UA (for reset)
+            self.initial_user_agent = profile.httpUserAgent()  # e.g., "Mozilla/5.0 ... QtWebEngine/... Chrome/..."
+            # Apply custom UA if configured
+            ua = self.get("user_agent", "").strip()
+            if ua:
+                profile.setHttpUserAgent(ua)
+                if self.log_manager:
+                    self.log_manager.log_system_event("Custom User-Agent applied", ua)
+            else:
+                if self.log_manager:
+                    self.log_manager.log_system_event("Using default User-Agent", self.initial_user_agent)
 
             if self.get("persist_cookies", True):
                 profile = QWebEngineProfile("QWSEnginePersistent")

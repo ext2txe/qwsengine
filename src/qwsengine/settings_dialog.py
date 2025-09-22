@@ -25,6 +25,20 @@ class SettingsDialog(QDialog):
         url_layout.addWidget(self.url_input)
         layout.addLayout(url_layout)
 
+        # User-Agent
+        ua_layout = QHBoxLayout()
+        ua_layout.addWidget(QLabel("User-Agent:"))
+        self.ua_input = QLineEdit()
+        self.ua_input.setPlaceholderText("Leave blank to use default")
+        self.ua_input.setText(self.settings_manager.get("user_agent", ""))
+        ua_layout.addWidget(self.ua_input)
+        layout.addLayout(ua_layout)
+
+        ua_reset_btn = QPushButton("Reset")
+        ua_reset_btn.setToolTip("Clear to use the default User-Agent")
+        ua_reset_btn.clicked.connect(lambda: self.ua_input.setText(""))
+        ua_layout.addWidget(ua_reset_btn)
+
         # Window size
         size_layout = QHBoxLayout()
         size_layout.addWidget(QLabel("Window Size:"))
@@ -144,6 +158,7 @@ class SettingsDialog(QDialog):
                 return
 
             self.settings_manager.set("start_url", url)
+            self.settings_manager.set("user_agent", self.ua_input.text().strip())
             self.settings_manager.set("window_width", width)
             self.settings_manager.set("window_height", height)
             self.settings_manager.set("logging_enabled", self.logging_enabled.isChecked())
@@ -154,6 +169,7 @@ class SettingsDialog(QDialog):
             self.settings_manager.set("persist_cache", self.persist_cache.isChecked())
 
             if self.settings_manager.save_settings():
+                self.settings_manager.apply_user_agent()
                 QMessageBox.information(self, "Settings Saved", "Settings have been saved successfully!")
                 self.accept()
             else:
