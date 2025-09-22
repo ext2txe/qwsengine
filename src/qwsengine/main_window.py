@@ -1,8 +1,8 @@
 import os
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QTabWidget, QMenuBar, QMessageBox
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QTabWidget, QMenuBar, QMessageBox, QToolBar
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QDialog
-
+from datetime import datetime
 from .settings import SettingsManager
 from .settings_dialog import SettingsDialog
 from .browser_tab import BrowserTab
@@ -32,10 +32,54 @@ class BrowserWindow(QWidget):
         menu_bar = self._create_menu_bar()
         layout.addWidget(menu_bar)
 
+        tool_bar = self._create_tool_bar()
+        layout.addWidget(tool_bar)
+        
         self.tabs = QTabWidget()
         self.tabs.setTabsClosable(True)
         self.tabs.tabCloseRequested.connect(self.close_tab)
         layout.addWidget(self.tabs)
+
+    def _create_tool_bar(self):
+        tb = QToolBar("Main Toolbar", self)
+        # Save HTML action
+        save_html_action = QAction("Save HTML", self)
+        save_html_action.setToolTip("Save the current tab's Document HTML")
+        save_html_action.triggered.connect(self.save_current_tab_html)
+        tb.addAction(save_html_action)
+        return tb
+
+    def save_current_tab_html(self):
+        try:
+            current = self.tabs.currentWidget()
+            if not current:
+                QMessageBox.information(self, "No Tab", "There is no active tab to save.")
+                return
+            if not current.is_loaded():
+                QMessageBox.warning(self, "Page Loading", "Wait until the page finishes loading before saving.")
+                return
+
+            save_dir = self.settings_manager.config_dir / "save"
+            save_dir.mkdir(parents=True, exist_ok=True)
+
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            title = current.browser.title() or current.browser.url().host() or "page"
+            safe_title = "".join(ch for ch in title if ch.isalnum() or ch in ("-", "_")).strip() or "page"
+            target = save_dir / f"{ts}_{safe_title}.html"
+
+            def _write_html(html: str):
+                try:
+                    target.write_text(html, encoding="utf-8")
+                    self.settings_manager.log_system_event("HTML saved", str(target))
+                    QMessageBox.information(self, "Saved", f"Saved HTML to:\n{target}")
+                except Exception as e:
+                    self.settings_manager.log_error(f"Failed to write HTML: {e}")
+                    QMessageBox.critical(self, "Error", f"Failed to write HTML file:\n{e}")
+
+            current.get_html(_write_html)
+        except Exception as e:
+            self.settings_manager.log_error(f"Save HTML failed: {e}")
+            QMessageBox.critical(self, "Error", f"Save failed:\n{e}")
 
     def _create_menu_bar(self):
         menu_bar = QMenuBar()

@@ -62,6 +62,7 @@ class BrowserTab(QWidget):
         self.browser.loadStarted.connect(self.on_load_started)
         self.browser.loadFinished.connect(self.on_load_finished)
 
+        self._page_loaded = False
         self.browser.load(url)
 
         layout.addLayout(controls_layout)
@@ -105,6 +106,7 @@ class BrowserTab(QWidget):
         self.url_input.setText(qurl.toString())
 
     def on_load_started(self):
+        self._page_loaded = False
         url = self.browser.url().toString()
         self.settings_manager.log_navigation(url, "", self.tab_id)
         if self.settings_manager.get("logging_enabled", True):
@@ -114,6 +116,7 @@ class BrowserTab(QWidget):
         url = self.browser.url().toString()
         title = self.browser.title()
         if success:
+            self._page_loaded = True
             self.settings_manager.log_navigation(url, title, self.tab_id)
             if self.settings_manager.get("logging_enabled", True):
                 self.check_cookie_files("after load")
@@ -163,3 +166,15 @@ class BrowserTab(QWidget):
     def closeEvent(self, event):
         self.settings_manager.log_tab_action("Closed", self.tab_id)
         super().closeEvent(event)
+
+    def is_loaded(self) -> bool:
+        return bool(getattr(self, "_page_loaded", False))
+
+    def get_html(self, callback):
+        # QWebEnginePage.toHtml is async; provide callback(html: str) -> None
+        try:
+            page = self.browser.page()
+            page.toHtml(callback)
+        except Exception as e:
+            self.settings_manager.log_error(f"toHtml failed: {e}", f"Tab-{self.tab_id}")
+            callback("")
