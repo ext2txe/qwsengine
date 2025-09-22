@@ -1,7 +1,7 @@
 import json
 import shutil
 from pathlib import Path
-from PySide6.QtCore import QStandardPaths
+from PySide6.QtCore import QStandardPaths, QByteArray, QRect, Qt
 from PySide6.QtWebEngineCore import QWebEngineProfile
 
 from .logging_utils import LogManager
@@ -20,6 +20,11 @@ class SettingsManager:
             "log_errors": True,
             "persist_cookies": True,
             "persist_cache": True,
+
+            "window_geometry": "",        # base64-encoded QByteArray
+            "window_maximized": False,
+            "window_fullscreen": False,        
+            "window_normal_rect": None,   # NEW: [x, y, w, h],        
         }
         self.settings = self._load_settings()
 
@@ -159,4 +164,80 @@ class SettingsManager:
         except Exception as e:
             if self.log_manager:
                 self.log_manager.log_error(f"Error clearing browser data: {e}")
+            return False
+
+    # ---------------- Browser Window Geometry ----------------
+    def restore_window_geometry(self, widget) -> bool:
+        """
+        Restore last saved window geometry and state.
+        Returns True if something was applied.
+        """
+        applied = False
+        try:
+            # 1) If we have a remembered normal rect, set that first (so un-maximizing later is correct).
+            nr = self.get("window_normal_rect")
+            if isinstance(nr, list) and len(nr) == 4:
+                x, y, w, h = nr
+                if all(isinstance(v, int) for v in (x, y, w, h)) and w > 0 and h > 0:
+                    widget.setGeometry(QRect(x, y, w, h))
+                    applied = True
+
+            # 2) If we have Qt's serialized geometry, try that too.
+            geo_b64 = self.get("window_geometry", "")
+            if geo_b64:
+                ba = QByteArray.fromBase64(geo_b64.encode("ascii"))
+                if not ba.isEmpty():
+                    ok = widget.restoreGeometry(ba)
+                    applied = applied or ok
+
+            # 3) Apply window state last so it wins visually.
+            if self.get("window_fullscreen", False):
+                widget.setWindowState(Qt.WindowFullScreen)
+                applied = True
+            elif self.get("window_maximized", False):
+                widget.setWindowState(Qt.WindowMaximized)
+                applied = True
+
+            if applied:
+                self.log_system_event("Window geometry restored")
+            else:
+                self.log_system_event("No saved window geometry found (using defaults)")
+            return applied
+
+        except Exception as e:
+            self.log_error(f"restore_window_geometry failed: {e}")
+            return False
+
+    def save_window_geometry(self, widget) -> bool:
+        """
+        Save current window geometry and state (including *normal* rect when maximized/fullscreen).
+        """
+        try:
+            # Serialized Qt geometry (works cross-platform & DPI-aware)
+            ba = widget.saveGeometry()
+            geo_b64 = bytes(ba.toBase64()).decode("ascii")
+            self.set("window_geometry", geo_b64)
+
+            # State
+            is_max = bool(widget.isMaximized())
+            is_full = bool(widget.isFullScreen())
+            self.set("window_maximized", is_max)
+            self.set("window_fullscreen", is_full)
+
+            # Normal rect: if maximized/fullscreen, capture the size it would have when unmaximized
+            if is_full or is_max:
+                nr = widget.normalGeometry()
+            else:
+                nr = widget.geometry()
+            self.set("window_normal_rect", [int(nr.x()), int(nr.y()), int(nr.width()), int(nr.height())])
+
+            ok = self.save_settings()
+            if ok:
+                self.log_system_event("Window geometry saved")
+            else:
+                self.log_error("Failed to save window geometry (settings file)")
+            return ok
+
+        except Exception as e:
+            self.log_error(f"save_window_geometry failed: {e}")
             return False

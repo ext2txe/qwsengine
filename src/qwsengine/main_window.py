@@ -13,18 +13,26 @@ class BrowserWindow(QWidget):
         super().__init__()
         self.settings_manager = SettingsManager()
 
-        script_path = os.path.abspath(__file__)
-        self.settings_manager.log_system_event("Application started", f"Script: {script_path}")
-
         self.setWindowTitle("QWSEngine - PySide6 Multi-tab Browser")
 
-        width = self.settings_manager.get("window_width", 1024)
-        height = self.settings_manager.get("window_height", 768)
-        self.resize(width, height)
-        self.settings_manager.log_system_event("Window initialized", f"Size: {width}x{height}")
-
+        # Build UI first so size hints are in place
         self._setup_ui()
+
+        # Restore geometry *after* UI is constructed
+        if not self.settings_manager.restore_window_geometry(self):
+            # Fallback to configured size if nothing saved yet
+            width = self.settings_manager.get("window_width", 1024)
+            height = self.settings_manager.get("window_height", 768)
+            self.resize(width, height)
+            self.settings_manager.log_system_event("Window initialized (fallback size)", f"Size: {width}x{height}")
+        else:
+            self.settings_manager.log_system_event("Window initialized (restored geometry)")
+
+        # Small asynchronous nudge: some platforms adjust after first show/layout pass
+        QTimer.singleShot(0, lambda: self.settings_manager.restore_window_geometry(self))
+
         self._create_initial_tab()
+
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -446,15 +454,15 @@ class BrowserWindow(QWidget):
 
     def closeEvent(self, event):
         try:
-            profile = self.settings_manager.get_web_profile()
-            if hasattr(profile, 'clearHttpCache'):
-                pass
-            self.settings_manager.log_system_event("Attempting to sync cookies before shutdown")
+            # Save geometry/state for next launch
+            self.settings_manager.save_window_geometry(self)
+            # ... your existing shutdown logics ...
         except Exception as e:
-            self.settings_manager.log_error(f"Error during cookie sync: {str(e)}")
+            self.settings_manager.log_error(f"Error during shutdown: {str(e)}")
 
         self.settings_manager.log_system_event("Application shutting down")
         super().closeEvent(event)
+
 
     def show_status(self, message: str, timeout_ms: int = 5000, level: str = "INFO"):
         """
