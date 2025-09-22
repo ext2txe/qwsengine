@@ -45,11 +45,19 @@ class BrowserWindow(QWidget):
 
     def _create_tool_bar(self):
         tb = QToolBar("Main Toolbar", self)
+
         # Save HTML action
         save_html_action = QAction("Save HTML", self)
         save_html_action.setToolTip("Save the current tab's Document HTML")
         save_html_action.triggered.connect(self.save_current_tab_html)
         tb.addAction(save_html_action)
+
+        #Save Screenshot (visible area)
+        save_shot_action = QAction("Save Screenshot", self)
+        save_shot_action.setToolTip("Save a PNG screenshot of the current tab's visible page")
+        save_shot_action.triggered.connect(self.save_current_tab_screenshot)
+        tb.addAction(save_shot_action)
+
         return tb
 
     def save_current_tab_html(self):
@@ -81,7 +89,48 @@ class BrowserWindow(QWidget):
 
         except Exception as e: 
             self.settings_manager.log_error(f"Save HTML failed: {e}")
-            
+
+    def save_current_tab_screenshot(self):
+        try:
+            current = self.tabs.currentWidget()
+            if not current:
+                self.show_status("No active tab to capture.", level="WARNING")
+                return
+
+            # Optional: require page loaded (you can remove this if you want to allow mid-load)
+            if hasattr(current, "is_loaded") and not current.is_loaded():
+                self.show_status("Page still loading… try again when it finishes.", level="WARNING")
+                return
+
+            view = getattr(current, "browser", None)
+            if view is None:
+                self.show_status("No browser view found in current tab.", level="ERROR")
+                return
+
+            # Grab the visible widget area (viewport)
+            pixmap = view.grab()  # QWidget.grab(): returns QPixmap of visible area
+
+            save_dir = self.settings_manager.config_dir / "save"
+            save_dir.mkdir(parents=True, exist_ok=True)
+
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            title = view.title() or view.url().host() or "page"
+            safe_title = "".join(ch for ch in title if ch.isalnum() or ch in ("-", "_")).strip() or "page"
+            target = save_dir / f"{ts}_{safe_title}.png"
+
+            if pixmap.isNull():
+                self.show_status("Screenshot failed (empty pixmap).", level="ERROR")
+                return
+
+            if not pixmap.save(str(target), "PNG"):
+                self.show_status("Failed to save screenshot.", level="ERROR")
+                return
+
+            self.show_status(f"Saved Screenshot → {target}", level="INFO")
+
+        except Exception as e:
+            self.show_status(f"Screenshot failed: {e}", level="ERROR")
+
     def _create_menu_bar(self):
         menu_bar = QMenuBar()
 
@@ -127,7 +176,6 @@ class BrowserWindow(QWidget):
 
         self.tabs.addTab(first_tab, "Home")
         self.settings_manager.log_system_event("Initial tab created")
-
 
     def create_new_tab(self):
         new_tab = BrowserTab(self.tabs, settings_manager=self.settings_manager)
