@@ -39,6 +39,60 @@ class SettingsDialog(QDialog):
         ua_reset_btn.clicked.connect(lambda: self.ua_input.setText(""))
         ua_layout.addWidget(ua_reset_btn)
 
+        # --- Proxy settings ---
+        proxy_layout = QVBoxLayout()
+        proxy_layout.addWidget(QLabel("Proxy"))
+
+        # Mode: System / Manual / None
+        from PySide6.QtWidgets import QComboBox
+        self.proxy_mode = QComboBox()
+        self.proxy_mode.addItems(["system", "manual", "none"])
+        self.proxy_mode.setCurrentText(self.settings_manager.get("proxy_mode", "system"))
+        proxy_layout.addWidget(QLabel("Mode:"))
+        proxy_layout.addWidget(self.proxy_mode)
+
+        # Manual fields (enabled only if mode == manual)
+        type_row = QHBoxLayout()
+        type_row.addWidget(QLabel("Type:"))
+        self.proxy_type = QComboBox()
+        self.proxy_type.addItems(["http", "socks5"])
+        self.proxy_type.setCurrentText(self.settings_manager.get("proxy_type", "http"))
+        type_row.addWidget(self.proxy_type)
+        proxy_layout.addLayout(type_row)
+
+        host_row = QHBoxLayout()
+        host_row.addWidget(QLabel("Host:"))
+        self.proxy_host = QLineEdit(self.settings_manager.get("proxy_host", ""))
+        host_row.addWidget(self.proxy_host)
+        proxy_layout.addLayout(host_row)
+
+        port_row = QHBoxLayout()
+        port_row.addWidget(QLabel("Port:"))
+        self.proxy_port = QLineEdit(str(self.settings_manager.get("proxy_port", 0) or ""))
+        port_row.addWidget(self.proxy_port)
+        proxy_layout.addLayout(port_row)
+
+        cred_row = QHBoxLayout()
+        cred_row.addWidget(QLabel("Username:"))
+        self.proxy_user = QLineEdit(self.settings_manager.get("proxy_user", ""))
+        cred_row.addWidget(self.proxy_user)
+        cred_row.addWidget(QLabel("Password:"))
+        self.proxy_password = QLineEdit(self.settings_manager.get("proxy_password", ""))
+        self.proxy_password.setEchoMode(QLineEdit.Password)
+        cred_row.addWidget(self.proxy_password)
+        proxy_layout.addLayout(cred_row)
+
+        # Enable/disable manual rows by mode
+        def _update_proxy_fields():
+            manual = (self.proxy_mode.currentText() == "manual")
+            for w in (self.proxy_type, self.proxy_host, self.proxy_port, self.proxy_user, self.proxy_password):
+                w.setEnabled(manual)
+        self.proxy_mode.currentTextChanged.connect(lambda _: _update_proxy_fields())
+        _update_proxy_fields()
+
+        layout.addLayout(proxy_layout)
+
+
         # Window size
         size_layout = QHBoxLayout()
         size_layout.addWidget(QLabel("Window Size:"))
@@ -168,8 +222,22 @@ class SettingsDialog(QDialog):
             self.settings_manager.set("persist_cookies", self.persist_cookies.isChecked())
             self.settings_manager.set("persist_cache", self.persist_cache.isChecked())
 
+            self.settings_manager.set("proxy_mode", self.proxy_mode.currentText())
+            self.settings_manager.set("proxy_type", self.proxy_type.currentText())
+            self.settings_manager.set("proxy_host", self.proxy_host.text().strip())
+            try:
+                self.settings_manager.set("proxy_port", int(self.proxy_port.text().strip() or "0"))
+            except ValueError:
+                QMessageBox.warning(self, "Invalid Port", "Port must be a number.")
+                return
+            self.settings_manager.set("proxy_user", self.proxy_user.text().strip())
+
+
             if self.settings_manager.save_settings():
                 self.settings_manager.apply_user_agent()
+                # Apply immediately (no restart)
+                self.settings_manager.apply_proxy_settings()
+
                 QMessageBox.information(self, "Settings Saved", "Settings have been saved successfully!")
                 self.accept()
             else:

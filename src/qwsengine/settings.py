@@ -3,6 +3,7 @@ import shutil
 from pathlib import Path
 from PySide6.QtCore import QStandardPaths, QByteArray, QRect, Qt
 from PySide6.QtWebEngineCore import QWebEngineProfile
+from PySide6.QtNetwork import QNetworkProxy, QNetworkProxyFactory
 
 from .logging_utils import LogManager
 
@@ -26,6 +27,12 @@ class SettingsManager:
             "window_fullscreen": False,        
             "window_normal_rect": None,   # NEW: [x, y, w, h],        
             "user_agent": "",       #empty = use default UA
+            "proxy_mode": "system",       # "system" | "manual" | "none"
+            "proxy_type": "http",         # "http" | "socks5" (manual only)
+            "proxy_host": "",
+            "proxy_port": 0,
+            "proxy_user": "",
+            "proxy_password": "",            
         }
         self.settings = self._load_settings()
 
@@ -167,6 +174,7 @@ class SettingsManager:
                 self.log_manager.log(f"Profile configured - Storage: {profile.persistentStoragePath()}", "SYSTEM")
                 self.log_manager.log(f"Download path: {absolute_download_path}", "SYSTEM")
 
+            self.apply_proxy_settings()  # NEW: apply proxy immediately
             return profile
         except Exception as e:
             if self.log_manager:
@@ -175,6 +183,48 @@ class SettingsManager:
 
     def get_web_profile(self):
         return self.web_profile
+
+
+    def apply_proxy_settings(self) -> None:
+        """Apply proxy settings from settings.json to the entire app."""
+        try:
+            mode = (self.get("proxy_mode", "system") or "system").lower()
+            if mode == "none":
+                QNetworkProxyFactory.setUseSystemConfiguration(False)
+                QNetworkProxy.setApplicationProxy(QNetworkProxy(QNetworkProxy.NoProxy))
+                self.log_system_event("Proxy disabled")
+                return
+
+            if mode == "system":
+                # Use OS/system proxy (PAC, etc.)
+                QNetworkProxyFactory.setUseSystemConfiguration(True)
+                QNetworkProxy.setApplicationProxy(QNetworkProxy(QNetworkProxy.DefaultProxy))
+                self.log_system_event("Using system proxy")
+                return
+
+            if mode == "manual":
+                ptype = (self.get("proxy_type", "http") or "http").lower()
+                qt_type = QNetworkProxy.HttpProxy if ptype == "http" else QNetworkProxy.Socks5Proxy
+                host = self.get("proxy_host", "")
+                port = int(self.get("proxy_port", 0) or 0)
+                proxy = QNetworkProxy(qt_type, host, port)
+
+                user = self.get("proxy_user", "")
+                pwd  = self.get("proxy_password", "")
+                if user or pwd:
+                    proxy.setUser(user)
+                    proxy.setPassword(pwd)
+
+                QNetworkProxyFactory.setUseSystemConfiguration(False)
+                QNetworkProxy.setApplicationProxy(proxy)
+                pretty = f"{ptype}://{host}:{port}"
+                self.log_system_event("Manual proxy applied", pretty)
+                return
+
+            self.log_error(f"Unknown proxy_mode: {mode}")
+
+        except Exception as e:
+            self.log_error(f"apply_proxy_settings failed: {e}")
 
     # ---------------- Browser Data ----------------
     def clear_browser_data(self) -> bool:

@@ -48,8 +48,11 @@ class BrowserTab(QWidget):
 
         profile = self.settings_manager.get_web_profile()
         page = QWebEnginePage(profile, self)
+
         self.browser = QWebEngineView()
         self.browser.setPage(page)
+
+        page.proxyAuthenticationRequired.connect(self._on_proxy_auth_required)
 
         if self.settings_manager.get("logging_enabled", True):
             try:
@@ -130,6 +133,19 @@ class BrowserTab(QWidget):
         else:
             self.settings_manager.log_error(f"Failed to load page: {url}", f"Tab-{self.tab_id}")
             self.loadFinished.emit(url, False, title)  # NEW
+
+    def _on_proxy_auth_required(self, request_url, authenticator, proxy_host):
+        try:
+            user = self.settings_manager.get("proxy_user", "")
+            pwd  = self.settings_manager.get("proxy_password", "")
+            if user or pwd:
+                authenticator.setUser(user)
+                authenticator.setPassword(pwd)
+                self.settings_manager.log_system_event("Proxy auth provided", proxy_host)
+            else:
+                self.settings_manager.log_system_event("Proxy asked for credentials but none set", proxy_host)
+        except Exception as e:
+            self.settings_manager.log_error(f"proxy auth handler failed: {e}", f"host={proxy_host}")
 
 
     def check_cookie_files(self, when: str):
