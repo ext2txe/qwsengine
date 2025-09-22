@@ -2,10 +2,10 @@ from pathlib import Path
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEnginePage
+from typing import TYPE_CHECKING
 
 # Forward reference (runtime import to avoid circulars)
 from .settings import SettingsManager  # type: ignore
-from .main_window import BrowserWindow  # type: ignore
 
 class BrowserTab(QWidget):
     _tab_counter = 0
@@ -75,31 +75,29 @@ class BrowserTab(QWidget):
         self.browser.load(url)
 
     def create_new_tab(self):
-        parent_window = self.get_browser_window()
-        if parent_window:
-            self.settings_manager.log_tab_action("New tab requested", self.tab_id)
-            from .browser_tab import BrowserTab  # lazy to avoid circular during import time
-            new_tab = BrowserTab(self.tab_widget, settings_manager=parent_window.settings_manager)
-            index = self.tab_widget.addTab(new_tab, "New Tab")
-            self.tab_widget.setCurrentIndex(index)
+        # No need to import BrowserWindow or walk parents; we already have settings_manager.
+        self.settings_manager.log_tab_action("New tab requested", self.tab_id)
+        from .browser_tab import BrowserTab  # lazy import to avoid any odd cycles
+        new_tab = BrowserTab(self.tab_widget, settings_manager=self.settings_manager)
+        index = self.tab_widget.addTab(new_tab, "New Tab")
+        self.tab_widget.setCurrentIndex(index)
 
     def get_browser_window(self):
         parent = self.parent()
-        # Walk up QWidget parents to find BrowserWindow
+        # Walk up QWidget parents to find a window that looks like our BrowserWindow
         while parent:
-            try:
-                from .main_window import BrowserWindow  # local import to avoid circularity at module import
-                if isinstance(parent, BrowserWindow):
-                    return parent
-            except Exception:
-                pass
+            # We avoid importing BrowserWindow here to prevent circular imports.
+            # Heuristic: a BrowserWindow has a 'settings_manager' attribute.
+            if hasattr(parent, 'settings_manager'):
+                return parent
             parent = parent.parent()
         return None
 
     def update_tab_title(self, title: str):
         index = self.tab_widget.indexOf(self)
         if index >= 0:
-            short_title = title[:15] + ("…" if len(title) > 15 else "")
+            #short_title = title[:15] + ("�" if len(title) > 15 else "")
+            short_title = title[:15] + ("..." if len(title) > 15 else "")
             self.tab_widget.setTabText(index, short_title)
             self.settings_manager.log_tab_action("Title updated", self.tab_id, f"Title: {title}")
 

@@ -49,6 +49,7 @@ cookies/
 sessions/
 screenshots/
 temp/
+zips/
 
 # Build artifacts
 *.exe
