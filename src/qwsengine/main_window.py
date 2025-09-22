@@ -1,5 +1,5 @@
 import os
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QTabWidget, QMenuBar, QMessageBox, QToolBar
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QTabWidget, QMenuBar, QMessageBox, QToolBar, QStatusBar
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QDialog
 from datetime import datetime
@@ -34,11 +34,14 @@ class BrowserWindow(QWidget):
 
         tool_bar = self._create_tool_bar()
         layout.addWidget(tool_bar)
-        
+
         self.tabs = QTabWidget()
         self.tabs.setTabsClosable(True)
         self.tabs.tabCloseRequested.connect(self.close_tab)
         layout.addWidget(self.tabs)
+
+        self.status_bar = QStatusBar(self)
+        layout.addWidget(self.status_bar)
 
     def _create_tool_bar(self):
         tb = QToolBar("Main Toolbar", self)
@@ -70,17 +73,15 @@ class BrowserWindow(QWidget):
             def _write_html(html: str):
                 try:
                     target.write_text(html, encoding="utf-8")
-                    self.settings_manager.log_system_event("HTML saved", str(target))
-                    QMessageBox.information(self, "Saved", f"Saved HTML to:\n{target}")
+                    self.show_status(f"Saved HTML → {target}", level="INFO")
                 except Exception as e:
-                    self.settings_manager.log_error(f"Failed to write HTML: {e}")
-                    QMessageBox.critical(self, "Error", f"Failed to write HTML file:\n{e}")
+                    self.show_status(f"Failed to write HTML: {e}", level="ERROR")
 
             current.get_html(_write_html)
-        except Exception as e:
-            self.settings_manager.log_error(f"Save HTML failed: {e}")
-            QMessageBox.critical(self, "Error", f"Save failed:\n{e}")
 
+        except Exception as e: 
+            self.settings_manager.log_error(f"Save HTML failed: {e}")
+            
     def _create_menu_bar(self):
         menu_bar = QMenuBar()
 
@@ -120,11 +121,21 @@ class BrowserWindow(QWidget):
 
     def _create_initial_tab(self):
         first_tab = BrowserTab(self.tabs, settings_manager=self.settings_manager)
+        # NEW: connect signals
+        first_tab.loadStarted.connect(self.on_tab_load_started)
+        first_tab.loadFinished.connect(self.on_tab_load_finished)
+
         self.tabs.addTab(first_tab, "Home")
         self.settings_manager.log_system_event("Initial tab created")
 
+
     def create_new_tab(self):
         new_tab = BrowserTab(self.tabs, settings_manager=self.settings_manager)
+
+        # NEW: connect signals
+        new_tab.loadStarted.connect(self.on_tab_load_started)
+        new_tab.loadFinished.connect(self.on_tab_load_finished)
+
         index = self.tabs.addTab(new_tab, "New Tab")
         self.tabs.setCurrentIndex(index)
         self.settings_manager.log_system_event("New tab created from menu")
@@ -197,3 +208,28 @@ class BrowserWindow(QWidget):
 
         self.settings_manager.log_system_event("Application shutting down")
         super().closeEvent(event)
+
+    def show_status(self, message: str, timeout_ms: int = 5000, level: str = "INFO"):
+        """
+        Show a transient message in the status bar and log it.
+        level: "INFO" | "WARNING" | "ERROR"
+        """
+        if hasattr(self, "status_bar"):
+            self.status_bar.showMessage(message, timeout_ms)
+
+        # Log alongside showing it
+        if level == "ERROR":
+            self.settings_manager.log_error(message)
+        elif level == "WARNING":
+            self.settings_manager.log_system_event("Warning", message)
+        else:
+            self.settings_manager.log_system_event("Status", message)
+
+    def on_tab_load_started(self, url: str):
+        self.show_status(f"Loading… {url}", level="INFO")
+
+    def on_tab_load_finished(self, url: str, success: bool, title: str):
+        if success:
+            self.show_status(f"Done: {title or url}", level="INFO")
+        else:
+            self.show_status(f"Failed to load: {url}", level="ERROR")

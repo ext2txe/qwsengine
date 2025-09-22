@@ -2,6 +2,7 @@ from pathlib import Path
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEnginePage
+from PySide6.QtCore import Signal
 from typing import TYPE_CHECKING
 
 # Forward reference (runtime import to avoid circulars)
@@ -9,6 +10,9 @@ from .settings import SettingsManager  # type: ignore
 
 class BrowserTab(QWidget):
     _tab_counter = 0
+
+    loadStarted = Signal(str)               #url
+    loadFinished = Signal(str, bool, str)   #url, success, title
 
     def __init__(self, tab_widget, url=None, settings_manager: SettingsManager = None):
         super().__init__()
@@ -106,8 +110,9 @@ class BrowserTab(QWidget):
         self.url_input.setText(qurl.toString())
 
     def on_load_started(self):
-        self._page_loaded = False
         url = self.browser.url().toString()
+        self._page_loaded = False
+        self.loadStarted.emit(url)  # NEW
         self.settings_manager.log_navigation(url, "", self.tab_id)
         if self.settings_manager.get("logging_enabled", True):
             self.check_cookie_files("before load")
@@ -118,10 +123,13 @@ class BrowserTab(QWidget):
         if success:
             self._page_loaded = True
             self.settings_manager.log_navigation(url, title, self.tab_id)
+            self.loadFinished.emit(url, True, title)   # NEW
             if self.settings_manager.get("logging_enabled", True):
                 self.check_cookie_files("after load")
         else:
             self.settings_manager.log_error(f"Failed to load page: {url}", f"Tab-{self.tab_id}")
+            self.loadFinished.emit(url, False, title)  # NEW
+
 
     def check_cookie_files(self, when: str):
         try:
