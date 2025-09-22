@@ -228,88 +228,61 @@ class SettingsManager:
         return None
     
     def setup_web_profile(self):
-        """Setup persistent web profile for cookies and cache"""
+        """Setup persistent web profile for cookies and cache - fixed approach"""
         try:
             # Create profile data directory
             profile_dir = self.config_dir / "profile"
             profile_dir.mkdir(parents=True, exist_ok=True)
             
-            # IMPORTANT: Create persistent profile with the storage path as constructor parameter
-            # This ensures the profile is properly initialized with persistence from the start
-            profile = QWebEngineProfile("qwsengine_profile", None)
-            
-            # Set persistent storage path FIRST, before any other operations
-            profile.setPersistentStoragePath(str(profile_dir))
-            
             if self.get("persist_cookies", True):
-                # Force persistent cookies policy
+                # CRITICAL FIX: Create named profile (not off-the-record)
+                # This is equivalent to: QWebEngineProfile("PersistentProfile", this)
+                profile = QWebEngineProfile("QWSEnginePersistent")
+                
+                # Set storage path with absolute path (not relative)
+                absolute_profile_path = str(profile_dir.resolve())
+                profile.setPersistentStoragePath(absolute_profile_path)
                 profile.setPersistentCookiesPolicy(QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies)
                 
                 if self.log_manager:
-                    self.log_manager.log(f"Persistent cookies enabled at: {profile_dir}", "SYSTEM")
+                    self.log_manager.log(f"Created NAMED persistent profile: QWSEnginePersistent", "SYSTEM")
+                    self.log_manager.log(f"Absolute storage path: {absolute_profile_path}", "SYSTEM")
+                    
             else:
-                profile.setPersistentCookiesPolicy(QWebEngineProfile.PersistentCookiesPolicy.NoPersistentCookies)
+                # Use off-the-record profile when persistence is disabled
+                profile = QWebEngineProfile()
                 if self.log_manager:
-                    self.log_manager.log("Persistent cookies disabled", "SYSTEM")
+                    self.log_manager.log("Using off-the-record profile (no persistence)", "SYSTEM")
             
             if self.get("persist_cache", True):
-                # Set cache directory
+                # Set cache directory with absolute path
                 cache_path = profile_dir / "cache"
                 cache_path.mkdir(exist_ok=True)
-                profile.setCachePath(str(cache_path))
+                absolute_cache_path = str(cache_path.resolve())
                 
-                # Set reasonable cache size (100MB)
+                profile.setCachePath(absolute_cache_path)
                 profile.setHttpCacheMaximumSize(100 * 1024 * 1024)
-                
-                # Force disk cache
                 profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.DiskHttpCache)
                 
                 if self.log_manager:
-                    self.log_manager.log(f"Persistent cache enabled at: {cache_path}", "SYSTEM")
+                    self.log_manager.log(f"Absolute cache path: {absolute_cache_path}", "SYSTEM")
             
-            # Set download path
+            # Set download path with absolute path
             download_path = profile_dir / "downloads"
             download_path.mkdir(exist_ok=True)
-            profile.setDownloadPath(str(download_path))
+            absolute_download_path = str(download_path.resolve())
+            profile.setDownloadPath(absolute_download_path)
             
             if self.log_manager:
-                self.log_manager.log(f"Web profile initialized - Storage: {profile_dir}", "SYSTEM")
-                self.log_manager.log(f"Storage path: {profile.persistentStoragePath()}", "SYSTEM")
-                self.log_manager.log(f"Cache path: {profile.cachePath()}", "SYSTEM")
-                
-                # Log actual Windows paths
-                self.log_manager.log(f"Config dir: {self.config_dir}", "SYSTEM")
-                self.log_manager.log(f"Profile dir exists: {profile_dir.exists()}", "SYSTEM")
-                
-                # Check what's in the profile directory
-                if profile_dir.exists():
-                    try:
-                        contents = list(profile_dir.iterdir())
-                        self.log_manager.log(f"Profile directory contents: {[str(p.name) for p in contents]}", "SYSTEM")
-                        
-                        # Look for cookie-related files
-                        for item in contents:
-                            if item.is_file() and 'cookie' in item.name.lower():
-                                self.log_manager.log(f"Found cookie file: {item.name} (size: {item.stat().st_size} bytes)", "SYSTEM")
-                            elif item.is_dir():
-                                # Check subdirectories for cookie files
-                                try:
-                                    sub_contents = list(item.iterdir())
-                                    if sub_contents:
-                                        self.log_manager.log(f"Directory {item.name} contains: {[str(p.name) for p in sub_contents[:5]]}", "SYSTEM")
-                                except:
-                                    pass
-                                    
-                    except Exception as e:
-                        self.log_manager.log(f"Could not list profile directory: {e}", "SYSTEM")
+                self.log_manager.log(f"Profile configured - Storage: {profile.persistentStoragePath()}", "SYSTEM")
+                self.log_manager.log(f"Download path: {absolute_download_path}", "SYSTEM")
             
             return profile
             
         except Exception as e:
             if self.log_manager:
                 self.log_manager.log_error(f"Failed to setup web profile: {str(e)}")
-            # Return default profile if setup fails
-            return QWebEngineProfile.defaultProfile()
+            return QWebEngineProfile()  # Fallback to off-the-record
 
     def get_web_profile(self):
         """Get the configured web profile"""
@@ -670,7 +643,7 @@ class BrowserTab(QWidget):
                 contents = list(cookies_dir.iterdir())
                 if contents:
                     self.settings_manager.log(f"Cookies directory {when}: {[p.name for p in contents]}", "COOKIE")
-                    # Check file sizes
+                    # Check file sizes and types
                     for item in contents:
                         if item.is_file():
                             size = item.stat().st_size
@@ -680,13 +653,28 @@ class BrowserTab(QWidget):
             else:
                 self.settings_manager.log(f"Cookies directory {when}: does not exist", "COOKIE")
             
-            # Also check for any files in the main profile directory that might be cookies
+            # Look for SQLite database files that might contain cookies
             if profile_dir.exists():
                 for item in profile_dir.iterdir():
-                    if item.is_file() and ('cookie' in item.name.lower() or 'network' in item.name.lower()):
-                        size = item.stat().st_size
-                        modified = item.stat().st_mtime
-                        self.settings_manager.log(f"Profile file {item.name}: {size} bytes, modified: {modified}", "COOKIE")
+                    if item.is_file():
+                        name_lower = item.name.lower()
+                        if (any(keyword in name_lower for keyword in ['cookie', 'network', 'state', 'history']) or 
+                            item.suffix.lower() in ['.db', '.sqlite', '.sqlite3']):
+                            size = item.stat().st_size
+                            modified = item.stat().st_mtime
+                            self.settings_manager.log(f"Profile file {item.name}: {size} bytes, modified: {modified}", "COOKIE")
+                
+                # Also check subdirectories for database files
+                for subdir in profile_dir.iterdir():
+                    if subdir.is_dir() and subdir.name in ['Local Storage', 'databases', 'IndexedDB']:
+                        try:
+                            for item in subdir.rglob('*'):
+                                if item.is_file() and item.suffix.lower() in ['.db', '.sqlite', '.sqlite3', '.ldb']:
+                                    size = item.stat().st_size
+                                    rel_path = item.relative_to(profile_dir)
+                                    self.settings_manager.log(f"Database file {rel_path}: {size} bytes", "COOKIE")
+                        except Exception:
+                            pass
                         
         except Exception as e:
             self.settings_manager.log_error(f"Could not check cookie files {when}: {str(e)}")
