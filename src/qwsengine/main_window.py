@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Optional, Union
 
 from PySide6.QtCore import QUrl, Qt, QSize, QByteArray, QSettings
-from PySide6.QtGui import QAction, QIcon
+from PySide6.QtGui import QAction, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QVBoxLayout,
     QApplication,
+    QMessageBox,
 )
 
 # Import your tab widget (your traceback shows browser_tab.py)
@@ -149,6 +150,25 @@ class BrowserWindow(QMainWindow):
         self.action_home.triggered.connect(self.home)
         self.action_new_tab.triggered.connect(self.create_new_tab)
         self.action_close_tab.triggered.connect(self.close_current_tab)
+
+        # --- Settings action ----------------------------------------------------------
+        self.action_settings = QAction(QIcon.fromTheme("preferences-system"), "Settings…", self)
+        # Standard preferences shortcut (Ctrl+, on most platforms)
+        try:
+            self.action_settings.setShortcut(QKeySequence.StandardKey.Preferences)
+        except Exception:
+            self.action_settings.setShortcut(QKeySequence("Ctrl+,"))
+        self.action_settings.triggered.connect(self.open_settings)
+
+        # Put it on the toolbar (you can reorder to taste)
+        self.navbar.addAction(self.action_settings)
+
+        # Also add to menu bar under Tools (created if missing)
+        mb = self.menuBar()  # QMainWindow already has one; creates if absent
+        tools_menu = None
+        for m in [mb.addMenu("&Tools")]:
+            tools_menu = m
+        tools_menu.addAction(self.action_settings)
 
         self._restore_window_state()
 
@@ -461,6 +481,51 @@ class BrowserWindow(QMainWindow):
         except Exception:
             pass
 
+    def open_settings(self):
+        """
+        Open the app's Settings UI.
+
+        Priority:
+        1) Call a settings_manager method if available (open/show dialog)
+        2) Fall back to a local SettingsDialog class, if present
+        3) Otherwise inform the user
+        """
+        # 1) Try settings_manager-provided dialogs
+        for attr in ("open_settings", "show_settings", "open_settings_dialog", "show_settings_dialog"):
+            fn = getattr(self.settings_manager, attr, None)
+            if callable(fn):
+                try:
+                    # Prefer passing parent=self if supported
+                    try:
+                        fn(parent=self)
+                    except TypeError:
+                        fn()
+                    return
+                except Exception:
+                    pass
+
+        # 2) Try a local dialog class
+        try:
+            from .settings_dialog import SettingsDialog  # adjust path/name if your dialog differs
+            try:
+                dlg = SettingsDialog(self.settings_manager, parent=self)
+            except TypeError:
+                # Some dialogs may not accept settings in ctor
+                dlg = SettingsDialog(parent=self)
+            # exec_ for PyQt5, exec for PySide6
+            if hasattr(dlg, "exec"):
+                dlg.exec()
+            else:
+                dlg.exec_()
+            return
+        except Exception:
+            pass
+
+        # 3) Last resort
+        try:
+            QMessageBox.information(self, "Settings", "Settings UI is not available in this build.")
+        except Exception:
+            pass
 
 
 
