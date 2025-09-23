@@ -1,11 +1,12 @@
 import os
 from pathlib import Path
 from datetime import datetime
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QTabWidget, QMenuBar, QMessageBox, QToolBar, QStatusBar, QComboBox
-from PySide6.QtGui import QImage, QPainter, QAction
-from PySide6.QtCore import QTimer, QRect
-from PySide6.QtWidgets import QDialog
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QTabWidget, QMenuBar, QMessageBox, QToolBar, QStatusBar, QComboBox, QDialog
+from PySide6.QtGui import QImage, QPainter, QAction, QIcon
+from PySide6.QtCore import QTimer, QRect, QUrl
+from PySide6.QtWebEngineCore import QWebEngineProfile
 
+from .webview import WebView
 from .settings import SettingsManager
 from .settings_dialog import SettingsDialog
 from .browser_tab import BrowserTab
@@ -13,7 +14,9 @@ from .browser_tab import BrowserTab
 class BrowserWindow(QWidget):
     def __init__(self):
         super().__init__()
+        
         self.settings_manager = SettingsManager()
+        self.setWindowIcon(QIcon(r"C:\Users\joe\source\repos\qwsengine\resources\icons\logo.ico"))
 
         self.setWindowTitle("QWSEngine - PySide6 Multi-tab Browser")
 
@@ -416,8 +419,37 @@ class BrowserWindow(QWidget):
         first_tab.loadStarted.connect(self.on_tab_load_started)
         first_tab.loadFinished.connect(self.on_tab_load_finished)
 
+        if hasattr(first_tab, "browser") and hasattr(first_tab.browser, "newTabRequested"):
+            first_tab.browser.newTabRequested.connect(self.open_url_in_new_tab)
+
         self.tabs.addTab(first_tab, "Home")
         self.settings_manager.log_system_event("Initial tab created")
+
+    def open_url_in_new_tab(self, url: QUrl):
+        """Create a BrowserTab and load the given URL in it."""
+        new_tab = BrowserTab(self.tabs, settings_manager=self.settings_manager)
+
+        # keep your existing signal wiring
+        new_tab.loadStarted.connect(self.on_tab_load_started)
+        new_tab.loadFinished.connect(self.on_tab_load_finished)
+
+        # IMPORTANT: wire popup/new-window requests from this tab too
+        if hasattr(new_tab, "browser") and hasattr(new_tab.browser, "newTabRequested"):
+            new_tab.browser.newTabRequested.connect(self.open_url_in_new_tab)
+
+        index = self.tabs.addTab(new_tab, "New Tab")
+        self.tabs.setCurrentIndex(index)
+
+        # Load the target URL
+        try:
+            qurl = url if isinstance(url, QUrl) else QUrl(str(url))
+            new_tab.browser.load(qurl)
+        except Exception:
+            pass
+
+        # log (optional)
+        self.settings_manager.log_system_event("New tab created from popup/new-window", str(url))
+        return new_tab
 
     def create_new_tab(self):
         new_tab = BrowserTab(self.tabs, settings_manager=self.settings_manager)
@@ -425,6 +457,10 @@ class BrowserWindow(QWidget):
         # NEW: connect signals
         new_tab.loadStarted.connect(self.on_tab_load_started)
         new_tab.loadFinished.connect(self.on_tab_load_finished)
+
+        # NEW: wire popup/new-window from this tab too
+        if hasattr(new_tab, "browser") and hasattr(new_tab.browser, "newTabRequested"):
+            new_tab.browser.newTabRequested.connect(self.open_url_in_new_tab)
 
         index = self.tabs.addTab(new_tab, "New Tab")
         self.tabs.setCurrentIndex(index)
@@ -563,7 +599,6 @@ class BrowserWindow(QWidget):
                 self.show_status(f"Execution callback error: {e}", level="ERROR")
                 self.settings_manager.log_error(f"Script callback error: {e}", script_name)
         return cb
-
 
     def open_scripts_folder(self):
         """Open the scripts directory in the OS file manager."""

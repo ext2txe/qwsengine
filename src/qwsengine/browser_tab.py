@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 # Forward reference (runtime import to avoid circulars)
 from .settings import SettingsManager  # type: ignore
+from .webview import WebView
 
 class BrowserTab(QWidget):
     _tab_counter = 0
@@ -49,7 +50,8 @@ class BrowserTab(QWidget):
         profile = self.settings_manager.get_web_profile()
         page = QWebEnginePage(profile, self)
 
-        self.browser = QWebEngineView()
+        #self.browser = QWebEngineView()
+        self.browser = WebView(self)
         self.browser.setPage(page)
 
         page.proxyAuthenticationRequired.connect(self._on_proxy_auth_required)

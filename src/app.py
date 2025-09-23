@@ -1,9 +1,19 @@
 import sys
 from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QIcon
 from qwsengine.main_window import BrowserWindow
 
 def main():
     app = QApplication(sys.argv)
+
+    # Optional but recommended on Windows: make sure taskbar uses *your* icon/group
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("qwsengine.app")
+    except Exception:
+        pass
+    app.setWindowIcon(QIcon(r"C:\Users\joe\source\repos\qwsengine\resources\icons\logo.ico"))
+
     app.setApplicationName("QWSEngine")
     app.setApplicationVersion("1.1.0")
     window = BrowserWindow()
