@@ -79,6 +79,9 @@ class SettingsDialog(QDialog):
         cred_row.addWidget(QLabel("Password:"))
         self.proxy_password = QLineEdit(self.settings_manager.get("proxy_password", ""))
         self.proxy_password.setEchoMode(QLineEdit.Password)
+        # Keep passwords of any sensible length; no trimming.
+        self.proxy_password.setClearButtonEnabled(True)
+        self.proxy_password.setMaxLength(4096)        
         cred_row.addWidget(self.proxy_password)
         proxy_layout.addLayout(cred_row)
 
@@ -231,7 +234,7 @@ class SettingsDialog(QDialog):
                 QMessageBox.warning(self, "Invalid Port", "Port must be a number.")
                 return
             self.settings_manager.set("proxy_user", self.proxy_user.text().strip())
-
+            self.settings_manager.set("proxy_password", self.proxy_password.text())
 
             if self.settings_manager.save_settings():
                 self.settings_manager.apply_user_agent()
