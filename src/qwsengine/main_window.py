@@ -1,5 +1,6 @@
 # qwsengine/main_window.py
 from __future__ import annotations
+import os
 
 from typing import Optional, Union
 
@@ -10,6 +11,7 @@ from PySide6.QtWidgets import (
     QWidget,
     QTabWidget,
     QToolBar,
+    QMenuBar,
     QLineEdit,
     QVBoxLayout,
     QApplication,
@@ -18,6 +20,10 @@ from PySide6.QtWidgets import (
 
 # Import your tab widget (your traceback shows browser_tab.py)
 from .browser_tab import BrowserTab
+from .safe_settings import _SafeSettings
+from .settings import SettingsManager
+
+
 
 # WebView is referenced for type/behavior expectations; actual class is in BrowserTab.browser
 try:
@@ -26,61 +32,6 @@ except ImportError:
     # Don't hard-fail here; BrowserTab will own the actual WebView instance.
     pass
 
-
-# ---------------------------------------------------------------------------
-# Safe settings shim
-# ---------------------------------------------------------------------------
-class _SafeSettings:
-    def __init__(self, backing=None):
-        self._b = backing
-
-    # reads
-    def get(self, key, default=None):
-        if self._b is None:
-            return default
-        getter = getattr(self._b, "get", None) or getattr(self._b, "value", None)
-        if callable(getter):
-            try:
-                return getter(key, default)
-            except Exception:
-                return default
-        try:
-            return self._b[key] if key in self._b else default
-        except Exception:
-            return default
-
-    # writes
-    def set(self, key, value):
-        if self._b is None:
-            return
-        setter = getattr(self._b, "set", None) or getattr(self._b, "setValue", None)
-        if callable(setter):
-            try:
-                setter(key, value)
-            except Exception:
-                pass
-
-    # existing logging helpers (keep yours)
-    def log_system_event(self, msg, extra=""):
-        fn = getattr(self._b, "log_system_event", None)
-        if callable(fn):
-            try: fn(msg, extra)
-            except Exception: pass
-
-    def log_tab_action(self, action, tab_id, details=""):
-        fn = getattr(self._b, "log_tab_action", None)
-        if callable(fn):
-            try: fn(action, tab_id, details)
-            except Exception: pass
-
-    def __getattr__(self, name):
-        if self._b is not None:
-            try:
-                return getattr(self._b, name)
-            except Exception:
-                pass
-        def _noop(*args, **kwargs): return None
-        return _noop
 
 
 class BrowserWindow(QMainWindow):
@@ -98,16 +49,30 @@ class BrowserWindow(QMainWindow):
         super().__init__(parent)
 
         # Wrap provided settings manager (can be None) with a safe shim
-        self.settings_manager = _SafeSettings(settings_manager)
+        #self.settings_manager = _SafeSettings(settings_manager)
+        self.settings_manager = SettingsManager()
 
         self.setWindowTitle("Qt Browser")
         self.resize(1200, 800)
 
+        self._setup_ui()
+
+
+    def _setup_ui(self):
         # --- Central layout with tabs --------------------------------------------
         central = QWidget(self)
         self.setCentralWidget(central)
+
+
         vbox = QVBoxLayout(central)
         vbox.setContentsMargins(0, 0, 0, 0)
+
+        # ---Menu  ---------------------------------------------------
+        menu_bar = self._create_menu_bar()
+        vbox.addWidget(menu_bar)
+
+        # q. how to get menu above the nav tool bar?
+        #vbox.add
 
         self.tabs = QTabWidget(self)
         self.tabs.setTabsClosable(True)
@@ -116,64 +81,132 @@ class BrowserWindow(QMainWindow):
         self.tabs.currentChanged.connect(self._on_current_tab_changed)
         vbox.addWidget(self.tabs)
 
-        # --- Navigation toolbar ---------------------------------------------------
-        self.navbar = QToolBar("Navigation", self)
-        self.navbar.setIconSize(QSize(16, 16))
-        self.addToolBar(Qt.TopToolBarArea, self.navbar)
+        # # --- Navigation toolbar ---------------------------------------------------
+        # self.navbar = QToolBar("Navigation", self)
+        # self.navbar.setIconSize(QSize(16, 16))
+        # self.addToolBar(Qt.TopToolBarArea, self.navbar)
+        # #self.addToolBar(Qt.ToolBarArea, self.navbar)
 
-        self.action_back = QAction(QIcon.fromTheme("go-previous"), "Back", self)
-        self.action_forward = QAction(QIcon.fromTheme("go-next"), "Forward", self)
-        self.action_reload = QAction(QIcon.fromTheme("view-refresh"), "Reload", self)
-        self.action_home = QAction(QIcon.fromTheme("go-home"), "Home", self)
-        self.action_new_tab = QAction(QIcon.fromTheme("tab-new"), "New Tab", self)
-        self.action_close_tab = QAction(QIcon.fromTheme("tab-close"), "Close Tab", self)
+        # self.action_back = QAction(QIcon.fromTheme("go-previous"), "Back", self)
+        # self.action_forward = QAction(QIcon.fromTheme("go-next"), "Forward", self)
+        # self.action_reload = QAction(QIcon.fromTheme("view-refresh"), "Reload", self)
+        # self.action_home = QAction(QIcon.fromTheme("go-home"), "Home", self)
+        # self.action_new_tab = QAction(QIcon.fromTheme("tab-new"), "New Tab", self)
+        # self.action_close_tab = QAction(QIcon.fromTheme("tab-close"), "Close Tab", self)
 
-        for act in (
-            self.action_back,
-            self.action_forward,
-            self.action_reload,
-            self.action_home,
-            self.action_new_tab,
-            self.action_close_tab,
-        ):
-            self.navbar.addAction(act)
+        # for act in (
+        #     self.action_back,
+        #     self.action_forward,
+        #     self.action_reload,
+        #     self.action_home,
+        #     self.action_new_tab,
+        #     self.action_close_tab,
+        # ):
+        #     self.navbar.addAction(act)
 
-        self.urlbar = QLineEdit(self)
-        self.urlbar.setClearButtonEnabled(True)
-        self.urlbar.returnPressed.connect(self._on_urlbar_return_pressed)
-        self.navbar.addWidget(self.urlbar)
+        # self.urlbar = QLineEdit(self)
+        # self.urlbar.setClearButtonEnabled(True)
+        # self.urlbar.returnPressed.connect(self._on_urlbar_return_pressed)
+        # self.navbar.addWidget(self.urlbar)
 
-        # Wire actions
-        self.action_back.triggered.connect(self.back)
-        self.action_forward.triggered.connect(self.forward)
-        self.action_reload.triggered.connect(self.reload)
-        self.action_home.triggered.connect(self.home)
-        self.action_new_tab.triggered.connect(self.create_new_tab)
-        self.action_close_tab.triggered.connect(self.close_current_tab)
+        # # Wire actions
+        # self.action_back.triggered.connect(self.back)
+        # self.action_forward.triggered.connect(self.forward)
+        # self.action_reload.triggered.connect(self.reload)
+        # self.action_home.triggered.connect(self.home)
+        # self.action_new_tab.triggered.connect(self.create_new_tab)
+        # self.action_close_tab.triggered.connect(self.close_current_tab)
 
-        # --- Settings action ----------------------------------------------------------
-        self.action_settings = QAction(QIcon.fromTheme("preferences-system"), "Settings…", self)
-        # Standard preferences shortcut (Ctrl+, on most platforms)
-        try:
-            self.action_settings.setShortcut(QKeySequence.StandardKey.Preferences)
-        except Exception:
-            self.action_settings.setShortcut(QKeySequence("Ctrl+,"))
-        self.action_settings.triggered.connect(self.open_settings)
+        # # --- Settings action ----------------------------------------------------------
+        # self.action_settings = QAction(QIcon.fromTheme("preferences-system"), "Settings…", self)
+        # # Standard preferences shortcut (Ctrl+, on most platforms)
+        # try:
+        #     self.action_settings.setShortcut(QKeySequence.StandardKey.Preferences)
+        # except Exception:
+        #     self.action_settings.setShortcut(QKeySequence("Ctrl+,"))
+        # self.action_settings.triggered.connect(self.open_settings)
 
-        # Put it on the toolbar (you can reorder to taste)
-        self.navbar.addAction(self.action_settings)
+        # # Put it on the toolbar (you can reorder to taste)
+        # self.navbar.addAction(self.action_settings)
 
-        # Also add to menu bar under Tools (created if missing)
-        mb = self.menuBar()  # QMainWindow already has one; creates if absent
-        tools_menu = None
-        for m in [mb.addMenu("&Tools")]:
-            tools_menu = m
-        tools_menu.addAction(self.action_settings)
 
         self._restore_window_state()
 
         # Initial tab
         self._create_initial_tab()
+
+
+    def _create_menu_bar(self):
+        menu_bar = QMenuBar()
+
+        file_menu = menu_bar.addMenu("File")
+
+        new_tab_action = QAction("New Tab", self)
+        new_tab_action.setShortcut("Ctrl+T")
+        new_tab_action.triggered.connect(self.create_new_tab)
+        file_menu.addAction(new_tab_action)
+
+        file_menu.addSeparator()
+
+        settings_action = QAction("Settings...", self)
+        settings_action.triggered.connect(self.open_settings)
+        file_menu.addAction(settings_action)
+
+        file_menu.addSeparator()
+
+        view_logs_action = QAction("View Logs...", self)
+        view_logs_action.triggered.connect(self.view_logs)
+        file_menu.addAction(view_logs_action)
+
+        file_menu.addSeparator()
+
+        clear_data_action = QAction("Clear Browser Data...", self)
+        clear_data_action.triggered.connect(self.clear_browser_data)
+        file_menu.addAction(clear_data_action)
+
+        file_menu.addSeparator()
+
+        exit_action = QAction("Exit", self)
+        exit_action.setShortcut("Ctrl+Q")
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
+
+        return menu_bar
+
+    def clear_browser_data(self):
+        reply = QMessageBox.question(self, "Clear Browser Data",
+                                   "This will delete all cookies, cache, downloads, and stored data. Continue?",
+                                   QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            if self.settings_manager.clear_browser_data():
+                QMessageBox.information(self, "Data Cleared",
+                                      "Browser data cleared successfully! Please restart the application.")
+                self.settings_manager.log_system_event("Browser data cleared via menu")
+            else:
+                QMessageBox.warning(self, "Clear Failed", "Failed to clear browser data.")
+
+
+    def view_logs(self):
+        log_path = self.settings_manager.get_log_file_path()
+        if log_path:
+            try:
+                import subprocess
+                import platform
+                log_dir = os.path.dirname(log_path)
+                if platform.system() == "Windows":
+                    subprocess.run(["explorer", log_dir])
+                elif platform.system() == "Darwin":
+                    subprocess.run(["open", log_dir])
+                else:
+                    subprocess.run(["xdg-open", log_dir])
+                self.settings_manager.log_system_event("Log directory opened")
+            except Exception as e:
+                self.settings_manager.log_error(f"Failed to open log directory: {str(e)}")
+                QMessageBox.information(self, "Log Location", f"Log file location:\n{log_path}")
+        else:
+            QMessageBox.information(self, "Logging Disabled", "Logging is currently disabled.")
+
+
 
     # =========================================================================
     # Public actions
