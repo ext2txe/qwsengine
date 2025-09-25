@@ -1,6 +1,8 @@
 # qwsengine/main_window.py
 from __future__ import annotations
 import os
+from pathlib import Path
+
 from datetime import datetime
 from typing import Optional, Union
 
@@ -13,6 +15,7 @@ from PySide6.QtWidgets import (
     QToolBar,
     QMenuBar,
     QStatusBar,    
+    QComboBox,
     QLineEdit,
     QVBoxLayout,
     QApplication,
@@ -57,6 +60,13 @@ class BrowserWindow(QMainWindow):
         self.resize(1200, 800)
 
         self._setup_ui()
+
+        # Scripts folder under app config
+        self.scripts_dir = self.settings_manager.config_dir / "scripts"
+        self.scripts_dir.mkdir(parents=True, exist_ok=True)
+
+        # Populate the combo at startup
+        self._load_script_list()
 
 
     def _setup_ui(self):
@@ -114,6 +124,33 @@ class BrowserWindow(QMainWindow):
         save_full_action.setToolTip("Capture the entire page (beyond viewport) as PNG")
         save_full_action.triggered.connect(self.save_full_page_screenshot)
         tb.addAction(save_full_action)
+
+        # ------------------ NEW: Scripts combo + buttons ------------------
+        tb.addSeparator()
+
+        # Script picker
+        self.scripts_combo = QComboBox(tb)
+        self.scripts_combo.setMinimumWidth(240)
+        tb.addWidget(self.scripts_combo)
+
+        # Refresh list
+        refresh_scripts_action = QAction("Refresh", self)
+        refresh_scripts_action.setToolTip("Reload the list of .js files from the scripts folder")
+        refresh_scripts_action.triggered.connect(self.refresh_scripts_list)
+        tb.addAction(refresh_scripts_action)
+
+        # Execute selected
+        exec_script_action = QAction("Execute", self)
+        exec_script_action.setToolTip("Execute the selected JavaScript file in the current page")
+        exec_script_action.triggered.connect(self.execute_selected_script)
+        tb.addAction(exec_script_action)
+
+        # Open Scripts Folder
+        open_scripts_action = QAction("Open Scripts Folder", self)
+        open_scripts_action.setToolTip("Open the scripts directory in your file manager")
+        open_scripts_action.triggered.connect(self.open_scripts_folder)
+        tb.addAction(open_scripts_action)
+        
 
         return tb
 
@@ -237,6 +274,9 @@ class BrowserWindow(QMainWindow):
         except Exception as e:
             self.show_status(f"Screenshot failed: {e}", level="ERROR")
 
+    # =========================================================================
+    # full page screenshot
+    # =========================================================================
     def save_full_page_screenshot(self):
         """Capture the entire scrollable page to a single PNG (stitched tiles)."""
         try:
@@ -308,7 +348,6 @@ class BrowserWindow(QMainWindow):
             self._fps_fail(f"Full-page capture failed: {e}")
             self._fps_reset()
 
-
     def _fps_start(self, metrics_json):
         """Initialize stitching based on JS metrics and kick off the first tile."""
         try:
@@ -375,7 +414,6 @@ class BrowserWindow(QMainWindow):
         except Exception as e:
             self._fps_fail(f"Init error: {e}")
             self._fps_reset()
-
 
     def _fps_next_tile(self):
         """Scroll to next tile and schedule a grab of the visible widget."""
@@ -861,6 +899,164 @@ class BrowserWindow(QMainWindow):
             QMessageBox.information(self, "Settings", "Settings UI is not available in this build.")
         except Exception:
             pass
+
+# --- Script methods -----------------------------------
+    def _load_script_list(self):
+        """Populate the scripts combo with all *.js files under the scripts folder."""
+        try:
+            if not hasattr(self, "scripts_combo"):
+                return  # toolbar not built yet
+
+            self.scripts_dir.mkdir(parents=True, exist_ok=True)
+            js_files = sorted([p for p in self.scripts_dir.glob("*.js") if p.is_file()], key=lambda p: p.name.lower())
+
+            self.scripts_combo.blockSignals(True)
+            self.scripts_combo.clear()
+            for p in js_files:
+                # store full path as userData, display only filename
+                self.scripts_combo.addItem(p.name, userData=str(p))
+            self.scripts_combo.blockSignals(False)
+
+            self.show_status(f"Scripts loaded: {len(js_files)} file(s)", level="INFO")
+            self.settings_manager.log_system_event("Scripts list refreshed", f"{self.scripts_dir}")
+        except Exception as e:
+            self.show_status(f"Failed to load scripts: {e}", level="ERROR")
+            self.settings_manager.log_error(f"Load scripts failed: {e}")
+
+    def refresh_scripts_list(self):
+        """Refresh button handler."""
+        self._load_script_list()
+
+    def execute_selected_script(self):
+        """Load the selected .js file into the page, then call its default function (filename without .js)."""
+        try:
+            current = self.tabs.currentWidget()
+            if not current:
+                self.show_status("No active tab to execute against.", level="WARNING")
+                return
+            if hasattr(current, "is_loaded") and not current.is_loaded():
+                self.show_status("Page still loading… try again when it finishes.", level="WARNING")
+                return
+
+            idx = self.scripts_combo.currentIndex() if hasattr(self, "scripts_combo") else -1
+            if idx < 0:
+                self.show_status("No script selected.", level="WARNING")
+                return
+
+            path_str = self.scripts_combo.currentData()
+            if not path_str:
+                self.show_status("Invalid script selection.", level="ERROR")
+                return
+
+            path = Path(path_str)
+            if not path.exists():
+                self.show_status(f"Script not found: {path.name}", level="ERROR")
+                return
+
+            # Read JS source
+            try:
+                js_source = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                js_source = path.read_text(encoding="utf-8-sig")
+
+            # Derive default function name from file name
+            func_name = self._derive_function_name_from_file(path.name)
+
+            self.show_status(f"Executing: {path.name} → {func_name}()", level="INFO")
+            page = current.browser.page()
+
+            # Step 1: inject/execute the script source so its function is defined in page context
+            def after_inject(_result):
+                # Step 2: call the derived function if present
+                call_code = f"""
+                    (function() {{
+                        try {{
+                            var fn = window["{func_name}"];
+                            if (typeof fn === "function") {{
+                                return fn();
+                            }}
+                            return "__NOFUNC__:{func_name}";
+                        }} catch (e) {{
+                            return "__ERR__:" + (e && e.message ? e.message : String(e));
+                        }}
+                    }})();
+                """
+                page.runJavaScript(call_code, self._on_script_executed(path.name, func_name))
+
+            page.runJavaScript(js_source, after_inject)
+
+        except Exception as e:
+            self.show_status(f"Execute failed: {e}", level="ERROR")
+            self.settings_manager.log_error(f"Execute script failed: {e}")
+
+    def _derive_function_name_from_file(self, filename: str) -> str:
+        """
+        Convert a file name like 'hello-world 01.js' -> 'hello_world_01'
+        so we can call window[funcName]().
+        """
+        stem = filename
+        if stem.lower().endswith(".js"):
+            stem = stem[:-3]
+        # Replace invalid JS identifier chars with underscores
+        import re
+        func = re.sub(r"[^A-Za-z0-9_]", "_", stem)
+        # Identifiers can't start with a digit; prefix underscore if needed
+        if func and func[0].isdigit():
+            func = "_" + func
+        # Avoid empty name
+        return func or "script"
+
+    def _on_script_executed(self, script_name: str, func_name: str):
+        """Create a callback capturing the script & function name for post-execution status/log."""
+        def cb(result):
+            try:
+                if isinstance(result, str) and result.startswith("__NOFUNC__:"):
+                    missing = result.split(":", 1)[1] if ":" in result else func_name
+                    self.show_status(f"No function named {missing}() found after loading {script_name}.", level="ERROR")
+                    self.settings_manager.log_error(f"Script function missing: {missing} in {script_name}")
+                    return
+                if isinstance(result, str) and result.startswith("__ERR__:"):
+                    msg = result.split(":", 1)[1] if ":" in result else "Unknown error"
+                    self.show_status(f"{func_name}() threw: {msg}", level="ERROR")
+                    self.settings_manager.log_error(f"Script error {script_name}/{func_name}: {msg}")
+                    return
+
+                # Success (result may be None if the function returns nothing)
+                preview = ""
+                if result is not None:
+                    text = str(result)
+                    if len(text) > 120:
+                        text = text[:117] + "..."
+                    preview = f" (result: {text})"
+                self.show_status(f"Executed {func_name}() from {script_name}{preview}", level="INFO")
+                self.settings_manager.log_system_event("Script executed", f"{script_name} -> {func_name}()")
+            except Exception as e:
+                self.show_status(f"Execution callback error: {e}", level="ERROR")
+                self.settings_manager.log_error(f"Script callback error: {e}", script_name)
+        return cb
+
+
+    def open_scripts_folder(self):
+        """Open the scripts directory in the OS file manager."""
+        try:
+            # Ensure folder exists
+            self.scripts_dir.mkdir(parents=True, exist_ok=True)
+            folder = str(self.scripts_dir.resolve())
+
+            import platform, subprocess
+            system = platform.system()
+            if system == "Windows":
+                subprocess.run(["explorer", folder])
+            elif system == "Darwin":  # macOS
+                subprocess.run(["open", folder])
+            else:  # Linux / BSD
+                subprocess.run(["xdg-open", folder])
+
+            self.show_status(f"Opened scripts folder → {folder}", level="INFO")
+            self.settings_manager.log_system_event("Scripts folder opened", folder)
+        except Exception as e:
+            self.show_status(f"Failed to open scripts folder: {e}", level="ERROR")
+            self.settings_manager.log_error(f"Open scripts folder failed: {e}")
 
 
 
