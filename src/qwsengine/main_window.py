@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QToolBar,
     QMenuBar,
+    QStatusBar,    
     QLineEdit,
     QVBoxLayout,
     QApplication,
@@ -77,12 +78,17 @@ class BrowserWindow(QMainWindow):
         # q. how to get menu above the nav tool bar?
         #vbox.add
 
+        # --- Create Tabs ---------------------------------------------------
         self.tabs = QTabWidget(self)
         self.tabs.setTabsClosable(True)
         self.tabs.setMovable(True)
         self.tabs.tabCloseRequested.connect(self._on_tab_close_requested)
         self.tabs.currentChanged.connect(self._on_current_tab_changed)
         vbox.addWidget(self.tabs)
+
+        # --- Create Status bar ---------------------------------------------------
+        self.status_bar = QStatusBar(self)
+        vbox.addWidget(self.status_bar)
 
         self._restore_window_state()
 
