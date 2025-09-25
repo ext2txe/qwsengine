@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QMenuBar,
     QStatusBar,    
     QComboBox,
+    QDialog,
     QLineEdit,
     QVBoxLayout,
     QApplication,
@@ -26,7 +27,7 @@ from PySide6.QtWidgets import (
 from .browser_tab import BrowserTab
 from .safe_settings import _SafeSettings
 from .settings import SettingsManager
-
+from .settings_dialog import SettingsDialog
 
 
 # WebView is referenced for type/behavior expectations; actual class is in BrowserTab.browser
@@ -855,50 +856,65 @@ class BrowserWindow(QMainWindow):
             pass
 
     def open_settings(self):
-        """
-        Open the app's Settings UI.
-
-        Priority:
-        1) Call a settings_manager method if available (open/show dialog)
-        2) Fall back to a local SettingsDialog class, if present
-        3) Otherwise inform the user
-        """
-        # 1) Try settings_manager-provided dialogs
-        for attr in ("open_settings", "show_settings", "open_settings_dialog", "show_settings_dialog"):
-            fn = getattr(self.settings_manager, attr, None)
-            if callable(fn):
-                try:
-                    # Prefer passing parent=self if supported
-                    try:
-                        fn(parent=self)
-                    except TypeError:
-                        fn()
-                    return
-                except Exception:
-                    pass
-
-        # 2) Try a local dialog class
         try:
-            from .settings_dialog import SettingsDialog  # adjust path/name if your dialog differs
-            try:
-                dlg = SettingsDialog(self.settings_manager, parent=self)
-            except TypeError:
-                # Some dialogs may not accept settings in ctor
-                dlg = SettingsDialog(parent=self)
-            # exec_ for PyQt5, exec for PySide6
-            if hasattr(dlg, "exec"):
-                dlg.exec()
+            self.settings_manager.log_system_event("Settings dialog opening...")
+            dialog = SettingsDialog(self, self.settings_manager)
+            self.settings_manager.log_system_event("Settings dialog created")
+            result = dialog.exec()
+            if result == QDialog.Accepted:
+                self.settings_manager.log_system_event("Settings saved")
             else:
-                dlg.exec_()
-            return
-        except Exception:
-            pass
+                self.settings_manager.log_system_event("Settings dialog cancelled")
+        except Exception as e:
+            self.settings_manager.log_error(f"Failed to open settings dialog: {str(e)}")
+            QMessageBox.critical(self, "Error", f"Failed to open settings: {str(e)}")
 
-        # 3) Last resort
-        try:
-            QMessageBox.information(self, "Settings", "Settings UI is not available in this build.")
-        except Exception:
-            pass
+
+    # def open_settings(self):
+    #     """
+    #     Open the app's Settings UI.
+
+    #     Priority:
+    #     1) Call a settings_manager method if available (open/show dialog)
+    #     2) Fall back to a local SettingsDialog class, if present
+    #     3) Otherwise inform the user
+    #     """
+    #     # 1) Try settings_manager-provided dialogs
+    #     for attr in ("open_settings", "show_settings", "open_settings_dialog", "show_settings_dialog"):
+    #         fn = getattr(self.settings_manager, attr, None)
+    #         if callable(fn):
+    #             try:
+    #                 # Prefer passing parent=self if supported
+    #                 try:
+    #                     fn(parent=self)
+    #                 except TypeError:
+    #                     fn()
+    #                 return
+    #             except Exception:
+    #                 pass
+
+    #     # 2) Try a local dialog class
+    #     try:
+    #         from .settings_dialog import SettingsDialog  # adjust path/name if your dialog differs
+    #         try:
+    #             dlg = SettingsDialog(self.settings_manager, parent=self)
+    #         except TypeError:
+    #             # Some dialogs may not accept settings in ctor
+    #             dlg = SettingsDialog(parent=self)
+    #         # exec_ for PyQt5, exec for PySide6
+    #         if hasattr(dlg, "exec"):
+    #             dlg.exec()
+    #         else:
+    #             dlg.exec_()
+    #         return
+    #     except Exception:
+    #         pass
+
+    #     # 3) Last resort
+    #     try:
+    #         QMessageBox.information(self, "Settings", "Settings UI is not available in this build.")
+    #     except Exception:
+    #         pass
 
 # --- Script methods -----------------------------------
     def _load_script_list(self):
