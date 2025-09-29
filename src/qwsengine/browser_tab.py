@@ -47,14 +47,13 @@ class BrowserTab(QWidget):
         controls_layout.addWidget(go_button)
         controls_layout.addWidget(new_tab_button)
 
+        # Always construct the view with the persistent profile so its internal page
+        # is born with the right profile (cookies persist across restarts).
         profile = self.settings_manager.get_web_profile()
-        page = QWebEnginePage(profile, self)
+        self.browser = WebView(self, profile=profile)
 
-        #self.browser = QWebEngineView()
-        self.browser = WebView(self)
-        self.browser.setPage(page)
-
-        page.proxyAuthenticationRequired.connect(self._on_proxy_auth_required)
+        # Connect signals on the page now owned by the view
+        self.browser.page().proxyAuthenticationRequired.connect(self._on_proxy_auth_required)
 
         if self.settings_manager.get("logging_enabled", True):
             try:
