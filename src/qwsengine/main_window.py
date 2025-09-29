@@ -57,6 +57,12 @@ class BrowserWindow(QMainWindow):
         #self.settings_manager = _SafeSettings(settings_manager)
         self.settings_manager = SettingsManager()
 
+        from PySide6.QtWebEngineCore import QWebEngineProfile
+
+        pcp = QWebEngineProfile.PersistentCookiesPolicy
+        policy = getattr(pcp, "ForcePersistentCookies", pcp.AllowPersistentCookies)
+        QWebEngineProfile.defaultProfile().setPersistentCookiesPolicy(policy)
+
         self.setWindowTitle("Qt Browser")
         self.resize(1200, 800)
 

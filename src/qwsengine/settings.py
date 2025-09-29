@@ -5,14 +5,19 @@ from PySide6.QtCore import QStandardPaths, QByteArray, QRect, Qt
 from PySide6.QtWebEngineCore import QWebEngineProfile
 from PySide6.QtNetwork import QNetworkProxy, QNetworkProxyFactory
 
+from .request_interceptor import HeaderInterceptor
 from .logging_utils import LogManager
 
 class SettingsManager:
     def __init__(self):
+        # Paths
         self.config_dir = Path(QStandardPaths.writableLocation(QStandardPaths.ConfigLocation)) / "qwsengine"
+        self.config_dir.mkdir(parents=True, exist_ok=True)
         self.config_file = self.config_dir / "settings.json"
+
+        # Defaults
         self.default_settings = {
-            "start_url": "https://flanq.com",
+            "start_url": "https://codaland.com/ipcheck.php",
             "window_width": 1024,
             "window_height": 768,
             "logging_enabled": True,
@@ -24,38 +29,114 @@ class SettingsManager:
 
             "window_geometry": "",        # base64-encoded QByteArray
             "window_maximized": False,
-            "window_fullscreen": False,        
-            "window_normal_rect": None,   # NEW: [x, y, w, h],        
-            "user_agent": "",       #empty = use default UA
+            "window_fullscreen": False,
+            "window_normal_rect": None,   # [x, y, w, h]
+
+            "user_agent": "",             # empty = use default UA
             "proxy_mode": "system",       # "system" | "manual" | "none"
             "proxy_type": "http",         # "http" | "socks5" (manual only)
             "proxy_host": "",
             "proxy_port": 0,
             "proxy_user": "",
-            "proxy_password": "",            
+            "proxy_password": "",
+
+            "accept_language": "en-US,en;q=0.9",           # e.g. "en-US,en;q=0.9" or "de-DE,de;q=0.9,en;q=0.8"
+            "send_dnt": False,
+            "spoof_chrome_client_hints": False,
+            # "headers_global": {
+            #     "X-App": "QWSEngine"
+            # },
+            "headers_global": {
+                "SEC_CH_UA": "Not)A;Brand;v=8;Chromium=138"
+            },            # e.g. {"X-Custom": "abc"}
+            "headers_per_host": {}           # e.g. {"api.example.com": {"Authorization": "Bearer <token>"}}
+
         }
+
+        # Load settings JSON first
         self.settings = self._load_settings()
 
         # Logging
-        self.log_manager = LogManager(self.config_dir) if self.get("logging_enabled", True) else None
+        self.log_manager = LogManager(self.config_dir) if self.settings.get("logging_enabled", True) else None
 
-        # Persistent web profile
+        # Persistent WebEngine profile (applies UA, cache, cookies)
         self.web_profile = self._setup_web_profile()
 
+
     # ---------------- Persistence ----------------
-    def _load_settings(self):
-        try:
-            if self.config_file.exists():
-                with open(self.config_file, 'r', encoding="utf-8") as f:
-                    loaded = json.load(f)
-                settings = self.default_settings.copy()
-                settings.update(loaded)
-                return settings
-        except Exception as e:
-            print(f"Error loading settings: {e}")
-        return self.default_settings.copy()
+    # -----------------------------
+    # Settings (JSON-backed)
+    # -----------------------------
+    def load_settings(self) -> dict:
+        """
+        Back-compat: older code may call settings_manager.load_settings()
+        Reloads from disk and returns the merged dict.
+        """
+        self.settings = self._load_settings()
+        return self.settings
+
+    # ---------- JSON persistence (private) ----------
 
     def save_settings(self) -> bool:
+        """
+        Legacy API: write current self.settings to disk. Returns True/False.
+        """
+        return self._save_settings(self.settings)
+
+
+    def _save_settings(self, obj: dict) -> bool:
+        """
+        Write the provided dict to settings.json. Returns True on success.
+        """
+        try:
+            self.config_dir.mkdir(parents=True, exist_ok=True)
+            with self.config_file.open("w", encoding="utf-8") as f:
+                json.dump(obj, f, indent=2, ensure_ascii=False)
+            return True
+        except Exception as e:
+            # Use your logger if available; fall back to print
+            if hasattr(self, "log_manager") and self.log_manager:
+                self.log_manager.log_error(f"Failed to save settings.json: {e}")
+            else:
+                print(f"Error saving settings: {e}")
+            return False
+
+    def load_settings(self) -> dict:
+        """
+        Legacy API: reload from disk and return the merged dict.
+        """
+        self.settings = self._load_settings()
+        return self.settings
+
+    def _load_settings(self) -> dict:
+        """
+        Read settings.json, merge with defaults, and write back the merged file.
+        """
+        data = {}
+        try:
+            if self.config_file.exists():
+                with self.config_file.open("r", encoding="utf-8") as f:
+                    data = json.load(f) or {}
+        except Exception as e:
+            if hasattr(self, "log_manager") and self.log_manager:
+                self.log_manager.log_error(f"Failed to read settings.json: {e}")
+            else:
+                print(f"Error reading settings: {e}")
+            data = {}
+
+        merged = dict(self.default_settings)
+        for k, v in data.items():
+            # keep explicit falsy values (0, False, "")
+            if v is not None:
+                merged[k] = v
+
+        # Persist merged to include any new default keys
+        self._save_settings(merged)
+        return merged
+
+    # ---------- JSON persistence (private) ----------
+
+    def _save_settings_old(self) -> bool:
         try:
             self.config_dir.mkdir(parents=True, exist_ok=True)
             with open(self.config_file, 'w', encoding="utf-8") as f:
@@ -65,12 +146,41 @@ class SettingsManager:
             print(f"Error saving settings: {e}")
             return False
 
+    # Optional ultra-short alias if some code calls 'save()'
+    def save(self):
+        self.save_settings()
+
+    def _load_settings_into_cache(self):
+        """Pull persisted values into a simple dict cache once at startup."""
+        def _get(key, default=""):
+            val = self._qsettings.value(key, default)
+            return val if val is not None else default
+
+        # Normalize on 'user_agent' key; keep a fallback for older builds.
+        ua = _get("user_agent", "")
+        if not ua:
+            ua = _get("userAgent", "")  # backward compatibility
+
+        self._cache["user_agent"] = ua
+        # ... load any other settings you need similarly
+
     # ---------------- Accessors ----------------
     def get(self, key, default=None):
-        return self.settings.get(key, default)
+        """
+        Read a value from the loaded settings dict, falling back to defaults.
+        Does not use any _cache object.
+        """
+        if self.settings is None:
+            # extremely early use before _load_settings
+            return self.default_settings.get(key, default)
+        return self.settings.get(key, self.default_settings.get(key, default))
 
-    def set(self, key, value) -> None:
+    def set(self, key, value):
+        """
+        Update settings dict and persist to JSON.
+        """
         self.settings[key] = value
+        self._save_settings(self.settings)
 
     def update(self, new_settings: dict) -> None:
         self.settings.update(new_settings)
@@ -124,62 +234,143 @@ class SettingsManager:
         except Exception:
             return self.get("user_agent", "") or ""
 
+    def set_user_agent(self, new_ua: str):
+        new_ua = (new_ua or "").strip()
+        self.set("user_agent", new_ua)  # persists to JSON
+        if self.web_profile:
+            self.web_profile.setHttpUserAgent(new_ua)
+            if self.log_manager:
+                self.log_manager.log(f"UA applied at runtime: {new_ua or '(default)'}", "SYSTEM")
 
     # ---------------- Web Profile ----------------
-    def _setup_web_profile(self):
+    # -----------------------------
+    # Web profile (Chromium storage)
+    # -----------------------------
+
+    def _setup_web_profile(self) -> QWebEngineProfile:
+        profile_dir = self.config_dir / "profile"
+        profile_dir.mkdir(parents=True, exist_ok=True)
+
+        profile = QWebEngineProfile("QWSEnginePersistent")
+
+        # Storage & cache paths
+        profile.setPersistentStoragePath(str(profile_dir.resolve()))
+        (profile_dir / "cache").mkdir(exist_ok=True)
+        profile.setCachePath(str((profile_dir / "cache").resolve()))
+        (profile_dir / "downloads").mkdir(exist_ok=True)
+        profile.setDownloadPath(str((profile_dir / "downloads").resolve()))
+
+        # Cookie persistence
+        pcp = QWebEngineProfile.PersistentCookiesPolicy
+        policy = getattr(pcp, "ForcePersistentCookies", pcp.AllowPersistentCookies) \
+                if self.get("persist_cookies", True) else pcp.NoPersistentCookies
+        profile.setPersistentCookiesPolicy(policy)
+
+        # Cache mode (best-effort)
         try:
-            profile_dir = self.config_dir / "profile"
-            profile_dir.mkdir(parents=True, exist_ok=True)
-
-            # Capture the default UA (for reset)
-            self.initial_user_agent = profile.httpUserAgent()  # e.g., "Mozilla/5.0 ... QtWebEngine/... Chrome/..."
-            # Apply custom UA if configured
-            ua = self.get("user_agent", "").strip()
-            if ua:
-                profile.setHttpUserAgent(ua)
-                if self.log_manager:
-                    self.log_manager.log_system_event("Custom User-Agent applied", ua)
-            else:
-                if self.log_manager:
-                    self.log_manager.log_system_event("Using default User-Agent", self.initial_user_agent)
-
-            if self.get("persist_cookies", True):
-                profile = QWebEngineProfile("QWSEnginePersistent")
-                absolute_profile_path = str(profile_dir.resolve())
-                profile.setPersistentStoragePath(absolute_profile_path)
-                profile.setPersistentCookiesPolicy(QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies)
-                if self.log_manager:
-                    self.log_manager.log(f"Created NAMED persistent profile: QWSEnginePersistent", "SYSTEM")
-                    self.log_manager.log(f"Absolute storage path: {absolute_profile_path}", "SYSTEM")
-            else:
-                profile = QWebEngineProfile()
-                if self.log_manager:
-                    self.log_manager.log("Using off-the-record profile (no persistence)", "SYSTEM")
-
             if self.get("persist_cache", True):
-                cache_path = profile_dir / "cache"
-                cache_path.mkdir(exist_ok=True)
-                absolute_cache_path = str(cache_path.resolve())
-                profile.setCachePath(absolute_cache_path)
-                profile.setHttpCacheMaximumSize(100 * 1024 * 1024)
                 profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.DiskHttpCache)
-                if self.log_manager:
-                    self.log_manager.log(f"Absolute cache path: {absolute_cache_path}", "SYSTEM")
+            else:
+                profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.MemoryHttpCache)
+        except Exception:
+            pass
 
-            download_path = profile_dir / "downloads"
-            download_path.mkdir(exist_ok=True)
-            absolute_download_path = str(download_path.resolve())
-            profile.setDownloadPath(absolute_download_path)
-            if self.log_manager:
-                self.log_manager.log(f"Profile configured - Storage: {profile.persistentStoragePath()}", "SYSTEM")
-                self.log_manager.log(f"Download path: {absolute_download_path}", "SYSTEM")
+        # User-Agent (global)
+        ua = (self.get("user_agent", "") or "").strip()
+        if ua:
+            profile.setHttpUserAgent(ua)
 
-            self.apply_proxy_settings()  # NEW: apply proxy immediately
-            return profile
+        # Accept-Language (global, if supported by your Qt build)
+        al = (self.get("accept_language", "") or "").strip()
+        try:
+            if al and hasattr(profile, "setHttpAcceptLanguage"):
+                profile.setHttpAcceptLanguage(al)  # Qt 6.5+ typically
+        except Exception:
+            pass
+
+        # Install header interceptor (per-request overrides)
+        self._header_interceptor = HeaderInterceptor(self)
+        try:
+            profile.setUrlRequestInterceptor(self._header_interceptor)
+        except Exception:
+            # Older Qt builds used .setRequestInterceptor; keep this for safety
+            if hasattr(profile, "setRequestInterceptor"):
+                profile.setRequestInterceptor(self._header_interceptor)
+
+        # Proxies (if you have this function)
+        try:
+            self.apply_proxy_settings()
         except Exception as e:
             if self.log_manager:
-                self.log_manager.log_error(f"Failed to setup web profile: {str(e)}")
-            return QWebEngineProfile()
+                self.log_manager.log_error(f"apply_proxy_settings failed: {e}")
+
+        # (Optional) Log
+        if self.log_manager:
+            try:
+                self.log_manager.log(f"UA on startup: {profile.httpUserAgent()}", "SYSTEM")
+                if al:
+                    self.log_manager.log(f"Accept-Language on startup: {al}", "SYSTEM")
+            except Exception:
+                pass
+
+        return profile
+
+
+    def _setup_web_profile_original(self) -> QWebEngineProfile:
+        profile_dir = self.config_dir / "profile"
+        profile_dir.mkdir(parents=True, exist_ok=True)
+
+        profile = QWebEngineProfile("QWSEnginePersistent")
+
+        # Storage paths
+        profile.setPersistentStoragePath(str(profile_dir.resolve()))
+        cache_dir = profile_dir / "cache"
+        cache_dir.mkdir(exist_ok=True)
+        profile.setCachePath(str(cache_dir.resolve()))
+        dl_dir = profile_dir / "downloads"
+        dl_dir.mkdir(exist_ok=True)
+        profile.setDownloadPath(str(dl_dir.resolve()))
+
+        # Cookies persistence
+        pcp = QWebEngineProfile.PersistentCookiesPolicy
+        if self.get("persist_cookies", True):
+            policy = getattr(pcp, "ForcePersistentCookies", pcp.AllowPersistentCookies)
+        else:
+            policy = pcp.NoPersistentCookies
+        profile.setPersistentCookiesPolicy(policy)
+
+        # Cache persistence (best-effort; not all bindings expose this)
+        try:
+            if self.get("persist_cache", True):
+                profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.DiskHttpCache)
+            else:
+                profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.MemoryHttpCache)
+        except Exception:
+            pass
+
+        # User-Agent from settings
+        ua = (self.get("user_agent", "") or "").strip()
+        if ua:
+            profile.setHttpUserAgent(ua)
+
+        # Optional logging
+        if self.log_manager:
+            try:
+                self.log_manager.log(f"UA on startup: {profile.httpUserAgent()}", "SYSTEM")
+                self.log_manager.log(f"Profile storage: {profile.persistentStoragePath()}", "SYSTEM")
+                self.log_manager.log(f"Cache path: {profile.cachePath()}", "SYSTEM")
+                self.log_manager.log(f"Download path: {profile.downloadPath()}", "SYSTEM")
+            except Exception:
+                pass
+
+        # If you apply proxies globally, call your existing method here:
+        try:
+            self.apply_proxy_settings()
+        except Exception as e:
+            if self.log_manager:
+                self.log_manager.log_error(f"apply_proxy_settings failed: {e}")
+
+        return profile
 
     def get_web_profile(self):
         return self.web_profile

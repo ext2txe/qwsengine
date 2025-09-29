@@ -25,7 +25,7 @@ class BrowserTab(QWidget):
         self.tab_id = BrowserTab._tab_counter
 
         if url is None:
-            url = self.settings_manager.get("start_url", "https://flanq.com")
+            url = self.settings_manager.get("start_url", "https://codaland.com/ipcheck.php")
 
         self.settings_manager.log_tab_action("Created", self.tab_id, f"URL: {url}")
 
@@ -49,7 +49,9 @@ class BrowserTab(QWidget):
 
         # Always construct the view with the persistent profile so its internal page
         # is born with the right profile (cookies persist across restarts).
-        profile = self.settings_manager.get_web_profile()
+
+        #profile = self.settings_manager.get_web_profile()
+        profile = self.settings_manager.web_profile
         self.browser = WebView(self, profile=profile)
 
         # Connect signals on the page now owned by the view
