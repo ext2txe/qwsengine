@@ -105,6 +105,42 @@ class BrowserWindow(QMainWindow):
         self.tabs.currentChanged.connect(self._on_current_tab_changed)
         vbox.addWidget(self.tabs)
 
+        # --- BEGIN: Go / + buttons (single-step feature) ---
+
+        from PySide6.QtWidgets import QToolBar, QLineEdit, QToolButton
+        from PySide6.QtCore import QUrl
+
+        # Simple toolbar with URL box + Go + +
+        self.navbar = QToolBar("Navigation", self)
+        self.addToolBar(self.navbar)  # BrowserWindow should be a QMainWindow
+
+        self.url_edit = QLineEdit(self)
+        self.url_edit.setPlaceholderText("Enter URL and press Go…")
+        self.url_edit.returnPressed.connect(lambda: self._nav_go())
+
+        go_btn = QToolButton(self)
+        go_btn.setText("Go")
+        # go_btn.setCheckable(True)
+        # go_btn.clicked.connect(self._nav_go)
+        go_btn.clicked.connect(lambda: self._nav_go())
+
+        # Add a toolbar action instead of a toolbutton for Go
+        # self.go_action = self.navbar.addAction()
+        # self.go_action.triggered.connect(self._nav_go)
+
+        plus_btn = QToolButton(self)
+        plus_btn.setText("+")
+        #plus_btn.clicked.connect(lambda: self._new_tab(switch=True))
+        plus_btn.clicked.connect(lambda: self._nav_go())
+
+        self.navbar.addWidget(self.url_edit)
+        self.navbar.addWidget(go_btn)
+        self.navbar.addWidget(plus_btn)
+
+        
+        # --- END: Go / + buttons ---
+
+
         # --- Create Status bar ---------------------------------------------------
         self.status_bar = QStatusBar(self)
         vbox.addWidget(self.status_bar)
@@ -113,6 +149,23 @@ class BrowserWindow(QMainWindow):
 
         # Initial tab
         self._create_initial_tab()
+        self.status_bar.showMessage("Loading…", 2000)  # auto-clear after 2s
+
+
+        
+    def _nav_go(self):
+        tab = self.tabs.currentWidget()
+        if not tab:
+            return
+        view = self._view_of(tab)
+
+        text = self.url_edit.text().strip()
+        if not text:
+            return
+
+        q = QUrl.fromUserInput(text)
+        if q.isValid():
+            view.setUrl(q)   # or view.load(q)
 
     def _create_tool_bar(self):
         tb = QToolBar("Main Toolbar", self)
@@ -346,6 +399,7 @@ class BrowserWindow(QMainWindow):
 
         # If we get here, our tab is malformed
         raise RuntimeError("Could not find QWebEngineView in BrowserTab")
+
 
     # =========================================================================
     # full page screenshot
@@ -665,7 +719,6 @@ class BrowserWindow(QMainWindow):
         q = QUrl.fromUserInput(val)
         return q if q.isValid() else QUrl("about:blank")
 
-
     def _get_tab_widget(self) -> QTabWidget:
         tw = getattr(self, "tab_widget", None)
         if isinstance(tw, QTabWidget):
@@ -777,6 +830,7 @@ class BrowserWindow(QMainWindow):
         if i != -1:
             self.tabs.setTabText(i, title if title else "New Tab")
 
+
     # --- URL helpers ------------------------------------------------------------
     def _normalize_to_url(self, url) -> QUrl:
         if isinstance(url, QUrl):
@@ -809,6 +863,7 @@ class BrowserWindow(QMainWindow):
             pass
         self._view_of(tab).setUrl(qurl)
 
+
     # =========================================================================
     # Internal wiring and helpers
     # =========================================================================
@@ -827,7 +882,6 @@ class BrowserWindow(QMainWindow):
         """Return the current BrowserTab or None."""
         w = self.tabs.currentWidget()
         return w if w and hasattr(w, "browser") else None
-
 
     def _wire_tab_signals(self, tab, container, retries: int = 20):
         v = self._view_of(tab)
@@ -890,7 +944,9 @@ class BrowserWindow(QMainWindow):
         except Exception:
             pass
 
-    # --- Public tab-creation API (menu actions / external callers) ----------
+
+    # --- Publ
+    # ic tab-creation API (menu actions / external callers) ----------
     def _new_tab(self, url: QUrl | str | None = None, switch: bool = True, profile: QWebEngineProfile | None = None, background: bool = False):
         prof = profile or QWebEngineProfile.defaultProfile()
 
@@ -1009,6 +1065,7 @@ class BrowserWindow(QMainWindow):
             return
         self.navigate_current(text)
 
+
     # Optional hooks; safe no-ops if you don't override them elsewhere
     def on_tab_load_started(self):  # pragma: no cover
         pass
@@ -1024,6 +1081,7 @@ class BrowserWindow(QMainWindow):
         # Persist geometry/state before closing
         self.save_window_geometry()
         super().closeEvent(event)
+
 
     # Logging helper
     def _log(self, msg: str, extra: str = ""):
@@ -1120,6 +1178,7 @@ class BrowserWindow(QMainWindow):
         except Exception as e:
             self.settings_manager.log_error(f"Failed to open settings dialog: {str(e)}")
             QMessageBox.critical(self, "Error", f"Failed to open settings: {str(e)}")
+
 
 # --- Script methods -----------------------------------
     def _load_script_list(self):
