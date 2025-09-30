@@ -772,6 +772,10 @@ class BrowserWindow(QMainWindow):
                 pass
         return tab
 
+    def _update_tab_title(self, tab, title: str):
+        i = self.tabs.indexOf(tab)
+        if i != -1:
+            self.tabs.setTabText(i, title if title else "New Tab")
 
     # --- URL helpers ------------------------------------------------------------
     def _normalize_to_url(self, url) -> QUrl:
@@ -902,6 +906,8 @@ class BrowserWindow(QMainWindow):
             self.tabs.setCurrentIndex(idx)
 
         view = self._view_of(tab)
+        view.titleChanged.connect(lambda title, t=tab: self._update_tab_title(t, title))
+
 
         # Defer navigation until after the widget is in the tab
         if url:
