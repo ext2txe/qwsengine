@@ -27,7 +27,6 @@ from PySide6.QtWebEngineCore import QWebEngineProfile
 
 # Import your tab widget (your traceback shows browser_tab.py)
 from .browser_tab import BrowserTab
-from .safe_settings import _SafeSettings
 from .settings import SettingsManager
 from .settings_dialog import SettingsDialog
 from PySide6.QtCore import QByteArray
@@ -945,11 +944,12 @@ class BrowserWindow(QMainWindow):
             pass
 
 
-    # --- Publ
-    # ic tab-creation API (menu actions / external callers) ----------
+    # --- Public tab-creation API (menu actions / external callers) ----------
     def _new_tab(self, url: QUrl | str | None = None, switch: bool = True, profile: QWebEngineProfile | None = None, background: bool = False):
         prof = profile or QWebEngineProfile.defaultProfile()
-
+        
+        self._apply_user_agent_to_profile(prof)
+        
         tab = BrowserTab(
             self.settings_manager,
             profile=prof,
@@ -1336,6 +1336,27 @@ class BrowserWindow(QMainWindow):
         except Exception as e:
             self.show_status(f"Failed to open scripts folder: {e}", level="ERROR")
             self.settings_manager.log_error(f"Open scripts folder failed: {e}")
+
+
+    def _user_agent_from_settings(self) -> str | None:
+        get = getattr(self.settings_manager, "get", None)
+        if not callable(get):
+            return None
+        for key in ("user_agent", "UserAgent", "userAgent", "ua"):
+            try:
+                val = get(key)
+            except Exception:
+                val = None
+            if val:
+                s = str(val).strip()
+                if s:
+                    return s
+        return None
+
+    def _apply_user_agent_to_profile(self, profile):
+        ua = self._user_agent_from_settings()
+        if ua and profile.httpUserAgent() != ua:
+            profile.setHttpUserAgent(ua)
 
 
     # --- Geometry/state (safe JSON via base64) ---------------------------------

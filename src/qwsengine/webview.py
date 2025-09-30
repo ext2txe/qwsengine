@@ -2,7 +2,6 @@
 from typing import Callable, Optional
 # --- Drop-in: put near your other imports ---
 from PySide6.QtCore import QUrl, Qt, Slot
-from PySide6.QtWidgets import QWidget, QVBoxLayout
 from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
 from PySide6.QtWebEngineWidgets import QWebEngineView
 

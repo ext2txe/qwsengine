@@ -1,10 +1,8 @@
 from pathlib import Path
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton
-from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
+from PySide6.QtWidgets import QWidget, QVBoxLayout
 from PySide6.QtWebEngineCore import QWebEnginePage
-from PySide6.QtCore import Signal, QUrl
+from PySide6.QtCore import Signal
 from typing import TYPE_CHECKING
-from PySide6.QtWebEngineCore import QWebEnginePage
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
 # Forward reference (runtime import to avoid circulars)
