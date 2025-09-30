@@ -1,83 +1,50 @@
 from pathlib import Path
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton
-from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
 from PySide6.QtWebEngineCore import QWebEnginePage
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Signal, QUrl
 from typing import TYPE_CHECKING
+from PySide6.QtWebEngineCore import QWebEnginePage
+from PySide6.QtWebEngineWidgets import QWebEngineView
 
 # Forward reference (runtime import to avoid circulars)
 from .settings import SettingsManager  # type: ignore
 from .webview import WebView
 
+class WebView(QWebEngineView):
+    """Catch new-window requests and ask the main window to create a tab."""
+    def __init__(self, parent=None, on_create_window=None):
+        super().__init__(parent)
+        self._on_create_window = on_create_window
+
+    def createWindow(self, _type: QWebEnginePage.WebWindowType) -> QWebEngineView:
+        if callable(self._on_create_window):
+            # Main window will create the tab and return its view
+            return self._on_create_window()
+        # Fallback: a temporary view (shouldn’t be used in normal flow)
+        return WebView(self, on_create_window=self._on_create_window)
+
+
 class BrowserTab(QWidget):
     _tab_counter = 0
-
-   
     loadStarted = Signal(str)               #url
     loadFinished = Signal(str, bool, str)   #url, success, title
 
-    def __init__(self, tab_widget, url=None, settings_manager: SettingsManager = None):
-        super().__init__()
-        self.tab_widget = tab_widget
+    """
+    A simple tab container that owns a WebView.
+    Keep a strong reference on self.view so _view_of(tab) is trivial.
+    """
+    def __init__(self, settings_manager, profile=None, on_create_window=None, parent=None):
+        super().__init__(parent)
         self.settings_manager = settings_manager
 
-        BrowserTab._tab_counter += 1
-        self.tab_id = BrowserTab._tab_counter
+        # REPLACE your existing view creation line with this:
+        self.view = WebView(self, on_create_window=on_create_window)
 
-        if url is None:
-            url = self.settings_manager.get("start_url", "https://codaland.com/ipcheck.php")
-
-        self.settings_manager.log_tab_action("Created", self.tab_id, f"URL: {url}")
-
+        # keep your existing layout code; e.g.:
         layout = QVBoxLayout(self)
-        controls_layout = QHBoxLayout()
-
-        self.url_input = QLineEdit()
-        self.url_input.setText(url)
-        self.url_input.returnPressed.connect(self.load_url)
-
-        go_button = QPushButton("Go")
-        go_button.clicked.connect(self.load_url)
-
-        new_tab_button = QPushButton("+")
-        new_tab_button.clicked.connect(self.create_new_tab)
-        new_tab_button.setToolTip("Create new tab (Ctrl+T)")
-
-        controls_layout.addWidget(self.url_input)
-        controls_layout.addWidget(go_button)
-        controls_layout.addWidget(new_tab_button)
-
-        # Always construct the view with the persistent profile so its internal page
-        # is born with the right profile (cookies persist across restarts).
-
-        #profile = self.settings_manager.get_web_profile()
-        profile = self.settings_manager.web_profile
-        self.browser = WebView(self, profile=profile)
-
-        # Connect signals on the page now owned by the view
-        self.browser.page().proxyAuthenticationRequired.connect(self._on_proxy_auth_required)
-
-        if self.settings_manager.get("logging_enabled", True):
-            try:
-                cookie_store = profile.cookieStore()
-                cookie_store.cookieAdded.connect(lambda cookie:
-                    self.settings_manager.log(f"Cookie added: {cookie.name().data().decode()} = {cookie.value().data().decode()[:50]}... for {cookie.domain()}", "COOKIE"))
-                cookie_store.cookieRemoved.connect(lambda cookie:
-                    self.settings_manager.log(f"Cookie removed: {cookie.name().data().decode()} from {cookie.domain()}", "COOKIE"))
-                self.settings_manager.log(f"Cookie store initialized for tab {self.tab_id}", "COOKIE")
-            except Exception as e:
-                self.settings_manager.log_error(f"Could not setup cookie debugging: {str(e)}")
-
-        self.browser.titleChanged.connect(self.update_tab_title)
-        self.browser.urlChanged.connect(self.update_url_bar)
-        self.browser.loadStarted.connect(self.on_load_started)
-        self.browser.loadFinished.connect(self.on_load_finished)
-
-        self._page_loaded = False
-        self.browser.load(url)
-
-        layout.addLayout(controls_layout)
-        layout.addWidget(self.browser)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.view)
 
     def load_url(self):
         url = self.url_input.text().strip()
@@ -150,25 +117,30 @@ class BrowserTab(QWidget):
         except Exception as e:
             self.settings_manager.log_error(f"proxy auth handler failed: {e}", f"host={proxy_host}")
 
-
     def check_cookie_files(self, when: str):
         try:
             profile_dir = Path(self.settings_manager.config_dir) / "profile"
             cookies_dir = profile_dir / "cookies"
-            if cookies_dir.exists():
-                contents = list(cookies_dir.iterdir())
-                if contents:
-                    self.settings_manager.log(f"Cookies directory {when}: {[p.name for p in contents]}", "COOKIE")
-                    for item in contents:
-                        if item.is_file():
-                            size = item.stat().st_size
-                            self.settings_manager.log(f"Cookie file {item.name}: {size} bytes", "COOKIE")
-                else:
-                    self.settings_manager.log(f"Cookies directory {when}: empty", "COOKIE")
-            else:
-                self.settings_manager.log(f"Cookies directory {when}: does not exist", "COOKIE")
 
-            if profile_dir.exists():
+            if cookies_dir.exists():
+                if cookies_dir.is_dir():
+                    contents = list(cookies_dir.iterdir())
+                    if contents:
+                        self.settings_manager.log(f"Cookies directory {when}: {[p.name for p in contents]}", "COOKIE")
+                        for item in contents:
+                            if item.is_file():
+                                size = item.stat().st_size
+                                self.settings_manager.log(f"Cookie file {item.name}: {size} bytes", "COOKIE")
+                    else:
+                        self.settings_manager.log(f"Cookies directory {when}: empty", "COOKIE")
+                else:
+                    # It's a file (very common: Chromium keeps cookies in a single SQLite DB)
+                    size = cookies_dir.stat().st_size
+                    self.settings_manager.log(f"'cookies' is a file {when}: {size} bytes", "COOKIE")
+            else:
+                self.settings_manager.log(f"Cookies path {when}: does not exist", "COOKIE")
+
+            if profile_dir.exists() and profile_dir.is_dir():
                 for item in profile_dir.iterdir():
                     if item.is_file():
                         name_lower = item.name.lower()

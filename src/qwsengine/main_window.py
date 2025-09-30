@@ -22,13 +22,15 @@ from PySide6.QtWidgets import (
     QApplication,
     QMessageBox,
 )
+from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtWebEngineCore import QWebEngineProfile
 
 # Import your tab widget (your traceback shows browser_tab.py)
 from .browser_tab import BrowserTab
 from .safe_settings import _SafeSettings
 from .settings import SettingsManager
 from .settings_dialog import SettingsDialog
-
+from PySide6.QtCore import QByteArray
 
 # WebView is referenced for type/behavior expectations; actual class is in BrowserTab.browser
 try:
@@ -114,14 +116,66 @@ class BrowserWindow(QMainWindow):
 
     def _create_tool_bar(self):
         tb = QToolBar("Main Toolbar", self)
+        tb.setMovable(True)
 
-        # Save HTML action
+        # --- Nav: Back / Forward / Reload / Stop ---
+        back_action = QAction("Back", self)
+        back_action.setShortcut(QKeySequence.Back)
+        back_action.triggered.connect(self.back)
+        tb.addAction(back_action)
+
+        fwd_action = QAction("Forward", self)
+        fwd_action.setShortcut(QKeySequence.Forward)
+        fwd_action.triggered.connect(self.forward)
+        tb.addAction(fwd_action)
+
+        reload_action = QAction("Reload", self)
+        reload_action.setShortcut(QKeySequence.Refresh)
+        reload_action.triggered.connect(self.reload)
+        tb.addAction(reload_action)
+
+        stop_action = QAction("Stop", self)
+        stop_action.triggered.connect(self.stop)
+        tb.addAction(stop_action)
+
+        tb.addSeparator()
+
+        # --- URL bar ---
+        self.urlbar = QLineEdit(tb)
+        self.urlbar.setPlaceholderText("Enter URL and press Enter…")
+        self.urlbar.returnPressed.connect(self._on_urlbar_return_pressed)
+        self.urlbar.setClearButtonEnabled(True)
+        self.urlbar.setMinimumWidth(420)
+        tb.addWidget(self.urlbar)
+
+        go_action = QAction("Go", self)
+        go_action.setShortcut("Return")
+        go_action.setStatusTip("Navigate to the URL in the address bar")
+        go_action.triggered.connect(lambda checked=False: self.navigate_current(self.urlbar.text()))
+        tb.addAction(go_action)
+
+        # --- New tab (+) ---
+        plus_action = QAction("+", self)
+        plus_action.setStatusTip("Open a new tab")
+        plus_action.setShortcut("Ctrl+T")
+        plus_action.triggered.connect(lambda checked=False: self._new_tab(switch=True))
+        tb.addAction(plus_action)
+
+        # --- Home ---
+        home_action = QAction("Home", self)
+        home_action.setToolTip("Go to Start URL (from Settings)")
+        def _go_home():
+            url = self.settings_manager.get("start_url", "") or "about:blank"
+            self.navigate_current(url)
+        home_action.triggered.connect(_go_home)
+        tb.addAction(home_action)
+
+        # --- Existing save actions / scripts UI (kept from your code) ---
         save_html_action = QAction("Save HTML", self)
         save_html_action.setToolTip("Save the current tab's Document HTML")
         save_html_action.triggered.connect(self.save_current_tab_html)
         tb.addAction(save_html_action)
 
-        #Save Screenshot (visible area)
         save_shot_action = QAction("Save Screenshot", self)
         save_shot_action.setToolTip("Save a PNG screenshot of the current tab's visible page")
         save_shot_action.triggered.connect(self.save_current_tab_screenshot)
@@ -132,32 +186,27 @@ class BrowserWindow(QMainWindow):
         save_full_action.triggered.connect(self.save_full_page_screenshot)
         tb.addAction(save_full_action)
 
-        # ------------------ NEW: Scripts combo + buttons ------------------
         tb.addSeparator()
 
-        # Script picker
+        # --- Scripts UI (unchanged) ---
         self.scripts_combo = QComboBox(tb)
         self.scripts_combo.setMinimumWidth(240)
         tb.addWidget(self.scripts_combo)
 
-        # Refresh list
         refresh_scripts_action = QAction("Refresh", self)
         refresh_scripts_action.setToolTip("Reload the list of .js files from the scripts folder")
         refresh_scripts_action.triggered.connect(self.refresh_scripts_list)
         tb.addAction(refresh_scripts_action)
 
-        # Execute selected
         exec_script_action = QAction("Execute", self)
         exec_script_action.setToolTip("Execute the selected JavaScript file in the current page")
         exec_script_action.triggered.connect(self.execute_selected_script)
         tb.addAction(exec_script_action)
 
-        # Open Scripts Folder
         open_scripts_action = QAction("Open Scripts Folder", self)
         open_scripts_action.setToolTip("Open the scripts directory in your file manager")
         open_scripts_action.triggered.connect(self.open_scripts_folder)
         tb.addAction(open_scripts_action)
-        
 
         return tb
 
@@ -280,6 +329,23 @@ class BrowserWindow(QMainWindow):
 
         except Exception as e:
             self.show_status(f"Screenshot failed: {e}", level="ERROR")
+
+    def _view_of(self, tab: QWidget) -> QWebEngineView:
+        """
+        Return the QWebEngineView for a given tab. This must never return None.
+        """
+        # Preferred: direct attribute set by our BrowserTab
+        view = getattr(tab, "view", None)
+        if isinstance(view, QWebEngineView):
+            return view
+
+        # Defensive fallback: search the tab for any QWebEngineView child
+        found = tab.findChild(QWebEngineView)
+        if found is not None:
+            return found
+
+        # If we get here, our tab is malformed
+        raise RuntimeError("Could not find QWebEngineView in BrowserTab")
 
     # =========================================================================
     # full page screenshot
@@ -553,88 +619,237 @@ class BrowserWindow(QMainWindow):
         else:
             QMessageBox.information(self, "Logging Disabled", "Logging is currently disabled.")
 
+    def _get_settings_manager(self):
+        """
+        Return a usable settings manager. Handles older attribute names and fallbacks.
+        """
+        sm = getattr(self, "settings_manager", None) or getattr(self, "settings", None)
+        if sm is not None:
+            return sm
+        # Last-resort: try importing your SettingsManager (adjust import if needed)
+        try:
+            from .settings import SettingsManager
+            sm = SettingsManager()
+            # cache so we don't do this again
+            self.settings_manager = sm
+            return sm
+        except Exception as e:
+            raise RuntimeError(f"Could not obtain settings manager: {e}")
 
 
     # =========================================================================
     # Public actions
     # =========================================================================
-    def create_new_tab(self):
-        """Create an empty tab from menu/toolbar."""
-        self._new_tab(switch=True)
-        self._log("New tab created from menu")
 
-    def open_url_in_new_tab(self, url: Union[QUrl, str]):
+    def _initial_url(self) -> QUrl:
         """
-        Open the given URL in a fresh tab. Accepts QUrl or str.
-        Also used by optional WebView.newTabRequested(QUrl).
+        Pull a start URL from settings (try a few common keys),
+        fall back to about:blank if none provided.
         """
-        from PySide6.QtCore import QUrl as _QUrl
+        get = getattr(self.settings_manager, "get", None)
+        val = None
 
-        tab = self._new_tab(switch=True)
+        if callable(get):
+            for key in ("start_url", "homepage", "home_url", "StartUrl", "HomePage"):
+                try:
+                    val = get(key)
+                except Exception:
+                    pass
+                if val:
+                    break
 
-        # Normalize URL
-        qurl = url if isinstance(url, _QUrl) else _QUrl(str(url))
-        if not qurl.isValid():
-            qurl = self._normalize_to_url(str(url))
+        if not val:
+            # optional hardcoded fallback, change to whatever you want
+            val = "https://example.com"
 
-        # Load
-        self._load_in_tab(tab, qurl)
-        self._log("New tab created (open_url_in_new_tab)", qurl.toString())
-        return tab
+        q = QUrl.fromUserInput(val)
+        return q if q.isValid() else QUrl("about:blank")
 
-    def close_current_tab(self):
-        idx = self.tabs.currentIndex()
-        if idx >= 0:
-            w = self.tabs.widget(idx)
-            self.tabs.removeTab(idx)
-            if w:
-                w.deleteLater()
 
-    def back(self):
+    def _get_tab_widget(self) -> QTabWidget:
+        tw = getattr(self, "tab_widget", None)
+        if isinstance(tw, QTabWidget):
+            return tw
+        # common legacy names
+        for name in ("tabs", "tabWidget", "tabview"):
+            tw = getattr(self, name, None)
+            if isinstance(tw, QTabWidget):
+                self.tab_widget = tw
+                return tw
+        # search children as fallback
+        tw = self.findChild(QTabWidget)
+        if isinstance(tw, QTabWidget):
+            self.tab_widget = tw
+            return tw
+        # last resort: create one and set as central
+        tw = QTabWidget(self)
+        self.setCentralWidget(tw)
+        self.tab_widget = tw
+        tw.currentChanged.connect(lambda _: self._sync_urlbar_with_current_tab())
+        return tw
+
+    def _get_current_tab(self):
+        tw = self._get_tab_widget()
+        container = tw.currentWidget()
+        if not container:
+            return None
+        # BrowserTab is the direct child we added to the container
+        return container.findChild(BrowserTab)
+
+    def _sync_urlbar_with_current_tab(self):
         tab = self._get_current_tab()
-        if tab and hasattr(tab, "browser"):
+        if tab and hasattr(self, "urlbar"):
             try:
-                tab.browser.back()
+                self.urlbar.setText(self._view_of(tab).url().toString())
             except Exception:
                 pass
 
-    def forward(self):
-        tab = self._get_current_tab()
-        if tab and hasattr(tab, "browser"):
-            try:
-                tab.browser.forward()
-            except Exception:
-                pass
+    def create_tab_for_popup(self):
+        """Create a new tab for popups and switch focus to it."""
+        tab = self._new_tab(switch=True)       # <-- was switch=False
+        view = self._view_of(tab)
+        # Belt-and-suspenders to ensure focus lands on the new tab/view:
+        self.tabs.setCurrentWidget(tab)
+        view.setFocus()
+        return view
 
-    def reload(self):
-        tab = self._get_current_tab()
-        if tab and hasattr(tab, "browser"):
-            try:
-                tab.browser.reload()
-            except Exception:
-                pass
-
-    def home(self):
-        self.navigate_current(self.settings_manager.get("home_url", "about:blank"))
-
-    def navigate_current(self, url: Union[str, QUrl]):
+    def _get_current_webview(self) -> QWebEngineView | None:
         tab = self._get_current_tab()
         if not tab:
-            tab = self._new_tab(switch=True)
-        qurl = url if isinstance(url, QUrl) else self._normalize_to_url(url)
+            return None
+        # Use the resolver you added earlier, or inline search:
+        try:
+            return self._view_of(tab)  # preferred if you added _view_of(...)
+        except Exception:
+            # fallback: find any QWebEngineView inside the tab
+            return tab.findChild(QWebEngineView)
+
+    def back(self, checked: bool = False):
+        w = self._get_current_webview()
+        if w: w.back()
+
+    def forward(self, checked: bool = False):
+        w = self._get_current_webview()
+        if w: w.forward()
+
+    def reload(self, checked: bool = False):
+        w = self._get_current_webview()
+        if w: w.reload()
+
+    def stop(self, checked: bool = False):
+        w = self._get_current_webview()
+        if w: w.stop()
+        def home(self):
+            self.navigate_current(self.settings_manager.get("home_url", "about:blank"))
+
+    def navigate_current(self, url):
+        tab = self._get_current_tab()
+        if not tab:
+            return
+        qurl = self._normalize_to_url(url)
         self._load_in_tab(tab, qurl)
+
+
+    # --- Public API for menu / shortcuts ----------------------------------------
+    def create_new_tab(self, arg=None, *, switch: bool = True):
+        """
+        QAction.triggered(bool) passes a bool; ignore it.
+        Optional 'arg' may be a URL string/QUrl if someone calls programmatically.
+        """
+        # tolerate QAction's bool
+        if isinstance(arg, bool):
+            arg = None
+
+        # create the tab
+        tab = self._new_tab(switch=switch)
+
+        # if a URL was provided, load it
+        if arg is not None:
+            try:
+                qurl = self._normalize_to_url(arg)
+                self._load_in_tab(tab, qurl)
+            except Exception:
+                pass
+        return tab
+
+
+    # --- URL helpers ------------------------------------------------------------
+    def _normalize_to_url(self, url) -> QUrl:
+        if isinstance(url, QUrl):
+            return url
+        s = (url or "").strip()
+        if not s:
+            return QUrl("about:blank")
+        q = QUrl(s)
+        if not q.scheme():
+            # Treat bare words as hostnames
+            q = QUrl(f"https://{s}")
+        return q
+
+    def navigate_current(self, url):
+        """Navigate the current tab to a URL/string."""
+        tab = self._get_current_tab()
+        if not tab:
+            return
+        qurl = self._normalize_to_url(url)
+        try:
+            self._view_of(tab).setUrl(qurl)
+        except Exception:
+            pass
+
+    def _load_in_tab(self, tab, qurl):
+        try:
+            if hasattr(self, "urlbar"):
+                self.urlbar.setText(qurl.toString())
+        except Exception:
+            pass
+        self._view_of(tab).setUrl(qurl)
 
     # =========================================================================
     # Internal wiring and helpers
     # =========================================================================
     def _create_initial_tab(self):
-        """Create the very first tab (blank)."""
-        self._new_tab(switch=True)
+        # Create the tab first (so it exists in the tab widget)
+        tab = self._new_tab(switch=True)
+
+        # Resolve the initial URL
+        qurl = self._initial_url()
+
+        # Load it on the next event loop tick so the view is fully ready
+        view = self._view_of(tab)
+        QTimer.singleShot(0, lambda: view.setUrl(qurl))
 
     def _get_current_tab(self):
         """Return the current BrowserTab or None."""
         w = self.tabs.currentWidget()
         return w if w and hasattr(w, "browser") else None
+
+
+    def _wire_tab_signals(self, tab, container, retries: int = 20):
+        v = self._view_of(tab)
+        if v is None:
+            if retries > 0:
+                QTimer.singleShot(50, lambda t=tab, c=container, r=retries-1: self._wire_tab_signals(t, c, r))
+            else:
+                try: self.settings_manager.log_error("Timed out waiting for web view in BrowserTab")
+                except Exception: pass
+            return
+        # connect once we have the view
+        v.titleChanged.connect(lambda t, c=container: self._on_tab_title_changed(c, t))
+        v.urlChanged.connect(lambda q, c=container: self._on_tab_url_changed(c, q))
+    
+    def _on_tab_title_changed(self, container, title: str):
+        tw = self._get_tab_widget()
+        i = tw.indexOf(container)
+        if i != -1:
+            tw.setTabText(i, title or "New Tab")
+            tw.setTabToolTip(i, title or "")
+
+    def _on_tab_url_changed(self, container, qurl: QUrl):
+        # Update address bar ONLY if this is the CURRENT tab
+        tw = self._get_tab_widget()
+        if tw.currentWidget() is container and hasattr(self, "urlbar"):
+            self.urlbar.setText(qurl.toString())
 
     def _wire_tab(self, tab):
         """
@@ -652,46 +867,63 @@ class BrowserWindow(QMainWindow):
             pass
 
         # Critical: provide a factory for QWebEngineView.createWindow()
-        if hasattr(tab, "browser") and hasattr(tab.browser, "set_create_window_handler"):
-            tab.browser.set_create_window_handler(self._create_new_tab_and_return_view)
+        if hasattr(tab, "browser") and hasattr(self._view_of(tab), "set_create_window_handler"):
+            self._view_of(tab).set_create_window_handler(self._create_new_tab_and_return_view)
 
         # Optional legacy: signal-based new tab requests
-        if hasattr(tab, "browser") and hasattr(tab.browser, "newTabRequested"):
-            tab.browser.newTabRequested.connect(self.open_url_in_new_tab)
+        if hasattr(tab, "browser") and hasattr(self._view_of(tab), "newTabRequested"):
+            self._view_of(tab).newTabRequested.connect(self.open_url_in_new_tab)
 
         # Keep URL bar in sync if possible
         try:
-            tab.browser.urlChanged.connect(self._on_browser_url_changed)
+            self._view_of(tab).urlChanged.connect(self._on_browser_url_changed)
         except Exception:
             pass
 
         # Keep tab title in sync
         try:
-            tab.browser.titleChanged.connect(self._on_browser_title_changed)
+            self._view_of(tab).titleChanged.connect(self._on_browser_title_changed)
         except Exception:
             pass
 
-    def _new_tab(self, url: Optional[str] = None, switch: bool = True):
-        """
-        Create a new BrowserTab, wire it, optionally load a URL, and add to the QTabWidget.
-        Returns the new BrowserTab.
-        """
-        # IMPORTANT: pass the *shimmed* settings manager, never None
-        tab = BrowserTab(self.tabs, settings_manager=self.settings_manager)
-        self._wire_tab(tab)
+    # --- Public tab-creation API (menu actions / external callers) ----------
+    def _new_tab(self, url: QUrl | str | None = None, switch: bool = True, profile: QWebEngineProfile | None = None, background: bool = False):
+        prof = profile or QWebEngineProfile.defaultProfile()
+
+        tab = BrowserTab(
+            self.settings_manager,
+            profile=prof,
+            on_create_window=self.create_tab_for_popup,
+            parent=self.tabs
+        )
 
         idx = self.tabs.addTab(tab, "New Tab")
-        if switch:
+        if switch and not background:
             self.tabs.setCurrentIndex(idx)
 
+        view = self._view_of(tab)
+
+        # Defer navigation until after the widget is in the tab
         if url:
-            try:
-                if hasattr(tab, "navigate"):
-                    tab.navigate(url)
-                else:
-                    tab.browser.load(self._normalize_to_url(url))
-            except Exception:
-                pass
+            qurl = QUrl(url) if isinstance(url, str) else url
+            QTimer.singleShot(0, lambda: view.setUrl(qurl))
+
+        # (Optional) keep your existing signal wiring here
+        # view.titleChanged.connect(lambda title, i=idx: self.tabs.setTabText(i, title or "New Tab"))
+
+        return tab
+
+    def open_url_in_new_tab(self, url: Union[str, QUrl], switch: bool = True):
+        """
+        Back-compat helper used by some signal flows (e.g., WebViewOld.newTabRequested(QUrl)).
+        Normalizes a URL/string and opens it in a fresh tab.
+        """
+        qurl = url if isinstance(url, QUrl) else self._normalize_to_url(str(url))
+        tab = self._new_tab(switch=switch)
+        try:
+            self._load_in_tab(tab, qurl)
+        except Exception:
+            pass
         return tab
 
     def _create_new_tab_and_return_view(self):
@@ -702,15 +934,23 @@ class BrowserWindow(QMainWindow):
         new_tab = self._new_tab(switch=True)  # no URL; Qt navigates this view
         return new_tab.browser
 
-    def _load_in_tab(self, tab, qurl: QUrl):
-        """Load a QUrl into the given tab using whichever API is available."""
+    def _load_in_tab(self, tab, qurl, retries: int = 20):
+        # reflect in the URL bar immediately
         try:
-            tab.browser.load(qurl)
+            if hasattr(self, "urlbar"):
+                self.urlbar.setText(qurl.toString())
         except Exception:
-            try:
-                tab.navigate(qurl.toString())
-            except Exception:
-                pass
+            pass
+
+        v = self._view_of(tab)
+        if v is None:
+            if retries > 0:
+                QTimer.singleShot(50, lambda t=tab, u=qurl, r=retries-1: self._load_in_tab(t, u, r))
+            else:
+                try: self.settings_manager.log_error(f"Failed to load {qurl.toString()}: web view not ready")
+                except Exception: pass
+            return
+        v.setUrl(qurl)
 
     def _normalize_to_url(self, text: str) -> QUrl:
         """Best-effort conversion of user text to a QUrl."""
@@ -740,7 +980,7 @@ class BrowserWindow(QMainWindow):
             self.urlbar.clear()
             return
         try:
-            current_url = tab.browser.url()
+            current_url = self._view_of(tab).url()
             if isinstance(current_url, QUrl):
                 self.urlbar.setText(current_url.toString())
         except Exception:
@@ -770,14 +1010,14 @@ class BrowserWindow(QMainWindow):
     def on_tab_load_finished(self):  # pragma: no cover
         pass
 
+    def _on_url_changed(self, qurl: QUrl, tab: QWidget):
+        # keep it quiet if you don’t need anything here yet
+        pass
+
     def closeEvent(self, event):
         # Persist geometry/state before closing
-        self._persist_window_state()
-        try:
-            super().closeEvent(event)
-        except Exception:
-            # If a parent class doesn’t implement it, we’re fine
-            pass
+        self.save_window_geometry()
+        super().closeEvent(event)
 
     # Logging helper
     def _log(self, msg: str, extra: str = ""):
@@ -874,53 +1114,6 @@ class BrowserWindow(QMainWindow):
         except Exception as e:
             self.settings_manager.log_error(f"Failed to open settings dialog: {str(e)}")
             QMessageBox.critical(self, "Error", f"Failed to open settings: {str(e)}")
-
-
-    # def open_settings(self):
-    #     """
-    #     Open the app's Settings UI.
-
-    #     Priority:
-    #     1) Call a settings_manager method if available (open/show dialog)
-    #     2) Fall back to a local SettingsDialog class, if present
-    #     3) Otherwise inform the user
-    #     """
-    #     # 1) Try settings_manager-provided dialogs
-    #     for attr in ("open_settings", "show_settings", "open_settings_dialog", "show_settings_dialog"):
-    #         fn = getattr(self.settings_manager, attr, None)
-    #         if callable(fn):
-    #             try:
-    #                 # Prefer passing parent=self if supported
-    #                 try:
-    #                     fn(parent=self)
-    #                 except TypeError:
-    #                     fn()
-    #                 return
-    #             except Exception:
-    #                 pass
-
-    #     # 2) Try a local dialog class
-    #     try:
-    #         from .settings_dialog import SettingsDialog  # adjust path/name if your dialog differs
-    #         try:
-    #             dlg = SettingsDialog(self.settings_manager, parent=self)
-    #         except TypeError:
-    #             # Some dialogs may not accept settings in ctor
-    #             dlg = SettingsDialog(parent=self)
-    #         # exec_ for PyQt5, exec for PySide6
-    #         if hasattr(dlg, "exec"):
-    #             dlg.exec()
-    #         else:
-    #             dlg.exec_()
-    #         return
-    #     except Exception:
-    #         pass
-
-    #     # 3) Last resort
-    #     try:
-    #         QMessageBox.information(self, "Settings", "Settings UI is not available in this build.")
-    #     except Exception:
-    #         pass
 
 # --- Script methods -----------------------------------
     def _load_script_list(self):
@@ -1057,7 +1250,6 @@ class BrowserWindow(QMainWindow):
                 self.settings_manager.log_error(f"Script callback error: {e}", script_name)
         return cb
 
-
     def open_scripts_folder(self):
         """Open the scripts directory in the OS file manager."""
         try:
@@ -1080,6 +1272,49 @@ class BrowserWindow(QMainWindow):
             self.show_status(f"Failed to open scripts folder: {e}", level="ERROR")
             self.settings_manager.log_error(f"Open scripts folder failed: {e}")
 
+
+    # --- Geometry/state (safe JSON via base64) ---------------------------------
+    def _qba_to_b64(self, qba: QByteArray) -> str:
+        # QByteArray -> base64 ascii string
+        return bytes(qba.toBase64()).decode("ascii")
+
+    def _b64_to_qba(self, s: str) -> QByteArray:
+        # base64 ascii string -> QByteArray
+        return QByteArray.fromBase64(s.encode("ascii"))
+
+    def save_window_geometry(self):
+        try:
+            geom_b64 = self._qba_to_b64(self.saveGeometry())
+            state_b64 = self._qba_to_b64(self.saveState())
+            self.settings_manager.set("window_geometry_b64", geom_b64)
+            self.settings_manager.set("window_state_b64", state_b64)
+            self.settings_manager.save()
+            self.settings_manager.log("[SYSTEM] Window geometry/state saved cleanly", "SYSTEM")
+        except Exception as e:
+            self.settings_manager.log_error(f"Failed to save geometry/state: {e}")
+
+    def restore_window_geometry(self):
+        try:
+            # Prefer new base64 keys
+            g_b64 = self.settings_manager.get("window_geometry_b64", "")
+            s_b64 = self.settings_manager.get("window_state_b64", "")
+
+            # Back-compat: if old raw-bytes keys exist, try to use them without touching settings.json
+            if not g_b64:
+                old_g = self.settings_manager.get("window_geometry")
+                if isinstance(old_g, (bytes, bytearray)):
+                    self.restoreGeometry(QByteArray(old_g))
+            if not s_b64:
+                old_s = self.settings_manager.get("window_state")
+                if isinstance(old_s, (bytes, bytearray)):
+                    self.restoreState(QByteArray(old_s))
+
+            if isinstance(g_b64, str) and g_b64:
+                self.restoreGeometry(self._b64_to_qba(g_b64))
+            if isinstance(s_b64, str) and s_b64:
+                self.restoreState(self._b64_to_qba(s_b64))
+        except Exception as e:
+            self.settings_manager.log_error(f"Failed to restore geometry/state: {e}")
 
 
 # --- Optional manual run for smoke testing -----------------------------------

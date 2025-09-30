@@ -40,17 +40,10 @@ class SettingsManager:
             "proxy_user": "",
             "proxy_password": "",
 
+            #if accept_language is "", then headers will not be  inserted
             "accept_language": "en-US,en;q=0.9",           # e.g. "en-US,en;q=0.9" or "de-DE,de;q=0.9,en;q=0.8"
             "send_dnt": False,
             "spoof_chrome_client_hints": False,
-            # "headers_global": {
-            #     "X-App": "QWSEngine"
-            # },
-            "headers_global": {
-                "SEC_CH_UA": "Not)A;Brand;v=8;Chromium=138"
-            },            # e.g. {"X-Custom": "abc"}
-            "headers_per_host": {}           # e.g. {"api.example.com": {"Authorization": "Bearer <token>"}}
-
         }
 
         # Load settings JSON first
@@ -67,13 +60,45 @@ class SettingsManager:
     # -----------------------------
     # Settings (JSON-backed)
     # -----------------------------
-    def load_settings(self) -> dict:
-        """
-        Back-compat: older code may call settings_manager.load_settings()
-        Reloads from disk and returns the merged dict.
-        """
-        self.settings = self._load_settings()
-        return self.settings
+    def _load_settings(self) -> dict:
+        data = {}
+        try:
+            if self.config_file.exists():
+                with self.config_file.open("r", encoding="utf-8") as f:
+                    data = json.load(f) or {}
+        except Exception as e:
+            # Backup corrupted file and continue with defaults
+            try:
+                backup = self.config_dir / f"settings.bad.{int(__import__('time').time())}.json"
+                self.config_file.replace(backup)  # atomic move
+                if hasattr(self, "log_manager") and self.log_manager:
+                    self.log_manager.log_error(f"settings.json was invalid ({e}); moved to {backup.name} and regenerated.")
+                else:
+                    print(f"Error reading settings: {e}\nBacked up to: {backup}")
+            except Exception:
+                # Fall back to simple rename if replace fails
+                try:
+                    self.config_file.rename(self.config_file.with_suffix(".bad.json"))
+                except Exception:
+                    pass
+            data = {}
+
+        # Merge onto defaults (keep falsy values)
+        merged = dict(self.default_settings)
+        for k, v in data.items():
+            if v is not None:
+                merged[k] = v
+
+        # Persist merged to ensure new keys are written
+        try:
+            self.config_dir.mkdir(parents=True, exist_ok=True)
+            with self.config_file.open("w", encoding="utf-8") as f:
+                json.dump(merged, f, indent=2)
+        except Exception as e:
+            if hasattr(self, "log_manager") and self.log_manager:
+                self.log_manager.log_error(f"Failed to write settings.json: {e}")
+
+        return merged
 
     # ---------- JSON persistence (private) ----------
 

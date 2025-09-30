@@ -1,15 +1,10 @@
 # qwsengine/webview.py
 from typing import Callable, Optional
-
-from PySide6.QtCore import Signal, QUrl
-from PySide6.QtGui import QDesktopServices
-from PySide6.QtWebEngineCore import (
-    QWebEngineProfile,
-    QWebEnginePage,
-    QWebEngineSettings,
-)
+# --- Drop-in: put near your other imports ---
+from PySide6.QtCore import QUrl, Qt, Slot
+from PySide6.QtWidgets import QWidget, QVBoxLayout
+from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage
 from PySide6.QtWebEngineWidgets import QWebEngineView
-
 
 class AppPage(QWebEnginePage):
     """
@@ -40,42 +35,32 @@ class AppPage(QWebEnginePage):
         return super().acceptNavigationRequest(url, nav_type, is_main_frame)
 
 
+
+        """
+    QWebEngineView with:
+      - Optional construction with a specific QWebEngineProfile
+      - Proper handling of new-window requests so links open in a *new tab*
+        within the main BrowserWindow (context menu, target=_blank, window.open).
+    """
+
 class WebView(QWebEngineView):
     """
-    QWebEngineView that properly returns a view from createWindow so that
-    target=_blank and window.open open in a new tab.
+    Custom view so target=_blank (and window.open) create a new tab instead of a new window.
+    We call back to the BrowserWindow to actually create the tab and return its view.
     """
-
-    # Useful if the rest of the app prefers listening rather than providing a handler
-    newTabRequested = Signal(QUrl)
-
-    def __init__(self, parent=None, profile: Optional[QWebEngineProfile] = None):
+    def __init__(self, parent=None, profile: QWebEngineProfile | None = None, on_create_window=None):
         super().__init__(parent)
-        self._profile = profile or QWebEngineProfile.defaultProfile()
-        self.setPage(AppPage(self._profile, self))
+        self._on_create_window = on_create_window
+        if profile is not None:
+            page = QWebEnginePage(profile, self)
+            self.setPage(page)
 
-        # Also set the view-level setting (proxies to page.settings())
-        self.settings().setAttribute(QWebEngineSettings.JavascriptCanOpenWindows, True)
-
-        # A callable that the main window sets: () -> WebView
-        self._create_window_handler: Optional[Callable[[], "WebView"]] = None
-
-    def set_create_window_handler(self, handler: Callable[[], "WebView"]) -> None:
-        """
-        The BrowserWindow/MainWindow should provide a factory that both:
-          1) creates a new tab,
-          2) returns the tab's internal WebView.
-        """
-        self._create_window_handler = handler
-
-    # ★ The critical piece: return a real WebView for popups/new windows
-    def createWindow(self, _type) -> "WebView":
-        # If the app provided a handler, use it to create/return the tab's view.
-        if self._create_window_handler is not None:
-            return self._create_window_handler()
-
-        # Fallback: create a detached view (not ideal, but better than silently failing).
-        fallback = WebView(profile=self._profile)
-        fallback.setAttribute(fallback.WA_DeleteOnClose, True)
-        fallback.show()
-        return fallback
+    # This gets called by Qt when a page wants a new window (e.g. target=_blank)
+    def createWindow(self, _type: QWebEnginePage.WebWindowType) -> QWebEngineView:
+        if callable(self._on_create_window):
+            # Ask the main window to create a background tab and return its view
+            return self._on_create_window(profile=self.page().profile())
+        # Fallback: create a temporary view if callback not wired (shouldn't happen)
+        temp = WebView(self, profile=self.page().profile(), on_create_window=self._on_create_window)
+        temp.setAttribute(Qt.WA_DeleteOnClose)
+        return temp
