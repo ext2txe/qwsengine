@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from qwsengine.config_manager import app_dir
 from PySide6.QtWebEngineCore import QWebEngineProfile
+from .app_info import APP_VERSION
 
 # Import your tab widget (your traceback shows browser_tab.py)
 from .browser_tab import BrowserTab
@@ -66,10 +67,13 @@ class BrowserWindow(QMainWindow):
         policy = getattr(pcp, "ForcePersistentCookies", pcp.AllowPersistentCookies)
         QWebEngineProfile.defaultProfile().setPersistentCookiesPolicy(policy)
 
-        self.setWindowTitle("Qt Browser")
+        self.setWindowTitle(f"Qt Browser v{APP_VERSION}")
         self.resize(1200, 800)
 
         self._setup_ui()
+
+        # ⬇⬇ restore window geometry/state BEFORE first show
+        self.settings_manager.restore_window_state(self)
 
         # Scripts folder under app config
         self.scripts_dir = self.settings_manager.config_dir / "scripts"
@@ -678,7 +682,6 @@ class BrowserWindow(QMainWindow):
             self.settings_manager.log_system_event("main_window", "Status", message)
 
     def view_logs(self):
-        log_path = self.settings_manager.get_log_file_path()
         if log_path:
             try:
                 import subprocess

@@ -6,6 +6,7 @@ import os
 from typing import Any, Dict, Optional
 
 from PySide6.QtCore import QStandardPaths
+from PySide6.QtCore import QByteArray, QRect
 from PySide6.QtWebEngineCore import QWebEngineProfile
 
 # Single source of truth for app identity & paths
@@ -367,44 +368,114 @@ class SettingsManager:
         # If flags changed, a restart is recommended for WebEngine to pick them up
         return changed
 
-
     def set_proxy_settings(
-        self,
-        *,
-        mode: str,
-        proxy_type: str | None = None,
-        host: str | None = None,
-        port: int | None = None,
-        user: str | None = None,
-        password: str | None = None,
-        persist: bool = True,
-        apply_now: bool = True,
-    ) -> bool:
+            self,
+            *,
+            mode: str,
+            proxy_type: str | None = None,
+            host: str | None = None,
+            port: int | None = None,
+            user: str | None = None,
+            password: str | None = None,
+            persist: bool = True,
+            apply_now: bool = True,
+        ) -> bool:
+            """
+            Update settings.json with new proxy config and apply.
+            Returns True if saved successfully (not whether restart is needed).
+            """
+            self.settings["proxy_mode"] = (mode or "system").lower()
+            if proxy_type is not None:
+                self.settings["proxy_type"] = proxy_type
+            if host is not None:
+                self.settings["proxy_host"] = host
+            if port is not None:
+                self.settings["proxy_port"] = int(port)
+            if user is not None:
+                self.settings["proxy_user"] = user
+            if password is not None:
+                self.settings["proxy_password"] = password
+
+            ok = True
+            if persist:
+                ok = self.save_settings()
+
+            if apply_now:
+                self.apply_proxy_settings()
+
+            return ok
+
+    def _qa_to_b64(self, ba: QByteArray) -> str:
+        # QByteArray → base64 str for JSON
+        import base64
+        return base64.b64encode(bytes(ba)).decode("ascii")
+
+    def _b64_to_qa(self, s: str) -> QByteArray:
+        import base64
+        try:
+            raw = base64.b64decode(s.encode("ascii"))
+            return QByteArray(raw)
+        except Exception:
+            return QByteArray()
+
+    def save_window_state(self, window) -> None:
         """
-        Update settings.json with new proxy config and apply.
-        Returns True if saved successfully (not whether restart is needed).
+        Persist geometry + window mode (normal/maximized/fullscreen).
+        Stores:
+        - window_geometry: base64(QByteArray)
+        - window_maximized: bool
+        - window_fullscreen: bool
+        - window_normal_rect: [x, y, w, h]  (only when in normal state)
         """
-        self.settings["proxy_mode"] = (mode or "system").lower()
-        if proxy_type is not None:
-            self.settings["proxy_type"] = proxy_type
-        if host is not None:
-            self.settings["proxy_host"] = host
-        if port is not None:
-            self.settings["proxy_port"] = int(port)
-        if user is not None:
-            self.settings["proxy_user"] = user
-        if password is not None:
-            self.settings["proxy_password"] = password
+        try:
+            self.settings["window_geometry"] = self._qa_to_b64(window.saveGeometry())
+            self.settings["window_maximized"] = bool(window.isMaximized())
+            self.settings["window_fullscreen"] = bool(window.isFullScreen())
 
-        ok = True
-        if persist:
-            ok = self.save_settings()
+            # Capture the last known *normal* rect so we can restore when not maximized/fullscreen
+            if not window.isMaximized() and not window.isFullScreen():
+                r = window.normalGeometry() if hasattr(window, "normalGeometry") else window.geometry()
+                self.settings["window_normal_rect"] = [int(r.x()), int(r.y()), int(r.width()), int(r.height())]
 
-        if apply_now:
-            self.apply_proxy_settings()
+            self.save_settings()
+        except Exception as e:
+            self.log_error("SettingsManager", f"Failed to save window state: {e}")
 
-        return ok
+    def restore_window_state(self, window) -> None:
+        """
+        Restore geometry and window mode.
+        Call this after widgets are constructed but before first show().
+        """
+        try:
+            geom_b64 = self.settings.get("window_geometry_b64") or ""
+            maximized = bool(self.settings.get("window_maximized", False))
+            fullscreen = bool(self.settings.get("window_fullscreen", False))
+            normal_rect = self.settings.get("window_normal_rect")
 
+            # 1) Restore raw geometry if available
+            if geom_b64:
+                ba = self._b64_to_qa(geom_b64)
+                if not ba.isEmpty():
+                    window.restoreGeometry(ba)
+
+            # 2) If a concrete normal rect is stored and we’re not going to maximize/fullscreen, apply it
+            if normal_rect and not maximized and not fullscreen:
+                try:
+                    x, y, w, h = [int(v) for v in normal_rect]
+                    window.setGeometry(QRect(x, y, w, h))
+                except Exception:
+                    pass
+
+            # 3) Restore window mode last
+            if fullscreen:
+                window.showFullScreen()
+            elif maximized:
+                window.showMaximized()
+            else:
+                # don’t call showNormal() here; just let the caller show()
+                pass
+        except Exception as e:
+            self.log_error("SettingsManager", f"Failed to restore window state: {e}")
 
     # --- add these helper methods inside SettingsManager ---
     def _normalize_key(self, key: str) -> str:
