@@ -23,12 +23,14 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
+from qwsengine.config_manager import app_dir
 from PySide6.QtWebEngineCore import QWebEngineProfile
 
 # Import your tab widget (your traceback shows browser_tab.py)
 from .browser_tab import BrowserTab
 from .settings import SettingsManager
 from .settings_dialog import SettingsDialog
+from qwsengine.about_dialog import AboutDialog
 from PySide6.QtCore import QByteArray
 
 # WebView is referenced for type/behavior expectations; actual class is in BrowserTab.browser
@@ -75,6 +77,29 @@ class BrowserWindow(QMainWindow):
 
         # Populate the combo at startup
         self._load_script_list()
+
+        self._init_menus()
+
+        
+    def configure_profile(profile: QWebEngineProfile):
+        cache = app_dir(QStandardPaths.CacheLocation) / "web"
+        storage = app_dir(QStandardPaths.AppDataLocation) / "web"
+        profile.setCachePath(str(cache))
+        profile.setPersistentStoragePath(str(storage))
+        profile.setPersistentCookiesPolicy(QWebEngineProfile.ForcePersistentCookies)
+
+    def _init_menus(self):
+        menubar = self.menuBar()
+
+        # Help menu (create if not existing)
+        help_menu = menubar.addMenu("&Help")
+        act_about = QAction("&About QWSEngine…", self)
+        act_about.triggered.connect(self.show_about_dialog)
+        help_menu.addAction(act_about)
+
+    def show_about_dialog(self):
+        dlg = AboutDialog(self)
+        dlg.exec()
 
 
     def _setup_ui(self):
@@ -307,7 +332,7 @@ class BrowserWindow(QMainWindow):
             if self.settings_manager.clear_browser_data():
                 QMessageBox.information(self, "Data Cleared",
                                       "Browser data cleared successfully! Please restart the application.")
-                self.settings_manager.log_system_event("Browser data cleared via menu")
+                self.settings_manager.log_system_event("main_window", "main_window","Browser data cleared via menu")
             else:
                 QMessageBox.warning(self, "Clear Failed", "Failed to clear browser data.")
 
@@ -339,7 +364,7 @@ class BrowserWindow(QMainWindow):
             current.get_html(_write_html)
 
         except Exception as e: 
-            self.settings_manager.log_error(f"Save HTML failed: {e}")
+            self.settings_manager.log_error("main_window", f"Save HTML failed: {e}")
 
     def save_current_tab_screenshot(self):
         try:
@@ -646,11 +671,11 @@ class BrowserWindow(QMainWindow):
 
         # Log alongside showing it
         if level == "ERROR":
-            self.settings_manager.log_error(message)
+            self.settings_manager.log_error("main_window", message)
         elif level == "WARNING":
-            self.settings_manager.log_system_event("Warning", message)
+            self.settings_manager.log_system_event("main_window", "Warning", message)
         else:
-            self.settings_manager.log_system_event("Status", message)
+            self.settings_manager.log_system_event("main_window", "Status", message)
 
     def view_logs(self):
         log_path = self.settings_manager.get_log_file_path()
@@ -665,9 +690,9 @@ class BrowserWindow(QMainWindow):
                     subprocess.run(["open", log_dir])
                 else:
                     subprocess.run(["xdg-open", log_dir])
-                self.settings_manager.log_system_event("Log directory opened")
+                self.settings_manager.log_system_event("main_window", "Log directory opened")
             except Exception as e:
-                self.settings_manager.log_error(f"Failed to open log directory: {str(e)}")
+                self.settings_manager.log_error("main_window", f"Failed to open log directory: {str(e)}")
                 QMessageBox.information(self, "Log Location", f"Log file location:\n{log_path}")
         else:
             QMessageBox.information(self, "Logging Disabled", "Logging is currently disabled.")
@@ -888,7 +913,7 @@ class BrowserWindow(QMainWindow):
             if retries > 0:
                 QTimer.singleShot(50, lambda t=tab, c=container, r=retries-1: self._wire_tab_signals(t, c, r))
             else:
-                try: self.settings_manager.log_error("Timed out waiting for web view in BrowserTab")
+                try: self.settings_manager.log_error("main_window", "Timed out waiting for web view in BrowserTab")
                 except Exception: pass
             return
         # connect once we have the view
@@ -1009,7 +1034,7 @@ class BrowserWindow(QMainWindow):
             if retries > 0:
                 QTimer.singleShot(50, lambda t=tab, u=qurl, r=retries-1: self._load_in_tab(t, u, r))
             else:
-                try: self.settings_manager.log_error(f"Failed to load {qurl.toString()}: web view not ready")
+                try: self.settings_manager.log_error("main_window", f"Failed to load {qurl.toString()}: web view not ready")
                 except Exception: pass
             return
         v.setUrl(qurl)
@@ -1086,7 +1111,7 @@ class BrowserWindow(QMainWindow):
     # Logging helper
     def _log(self, msg: str, extra: str = ""):
         try:
-            self.settings_manager.log_system_event(msg, extra)
+            self.settings_manager.log_system_event("main_window", msg, extra)
         except Exception:
             pass
 
@@ -1167,16 +1192,16 @@ class BrowserWindow(QMainWindow):
 
     def open_settings(self):
         try:
-            self.settings_manager.log_system_event("Settings dialog opening...")
+            self.settings_manager.log_system_event("main_window", "Settings dialog opening...")
             dialog = SettingsDialog(self, self.settings_manager)
-            self.settings_manager.log_system_event("Settings dialog created")
+            self.settings_manager.log_system_event("main_window", "Settings dialog created")
             result = dialog.exec()
             if result == QDialog.Accepted:
-                self.settings_manager.log_system_event("Settings saved")
+                self.settings_manager.log_system_event("main_window", "Settings saved")
             else:
-                self.settings_manager.log_system_event("Settings dialog cancelled")
+                self.settings_manager.log_system_event("main_window", "Settings dialog cancelled")
         except Exception as e:
-            self.settings_manager.log_error(f"Failed to open settings dialog: {str(e)}")
+            self.settings_manager.log_error("main_window", f"Failed to open settings dialog: {str(e)}")
             QMessageBox.critical(self, "Error", f"Failed to open settings: {str(e)}")
 
 
@@ -1198,10 +1223,10 @@ class BrowserWindow(QMainWindow):
             self.scripts_combo.blockSignals(False)
 
             self.show_status(f"Scripts loaded: {len(js_files)} file(s)", level="INFO")
-            self.settings_manager.log_system_event("Scripts list refreshed", f"{self.scripts_dir}")
+            self.settings_manager.log_system_event("main_window", "Scripts list refreshed", f"{self.scripts_dir}")
         except Exception as e:
             self.show_status(f"Failed to load scripts: {e}", level="ERROR")
-            self.settings_manager.log_error(f"Load scripts failed: {e}")
+            self.settings_manager.log_error("main_window", f"Load scripts failed: {e}")
 
     def refresh_scripts_list(self):
         """Refresh button handler."""
@@ -1267,7 +1292,7 @@ class BrowserWindow(QMainWindow):
 
         except Exception as e:
             self.show_status(f"Execute failed: {e}", level="ERROR")
-            self.settings_manager.log_error(f"Execute script failed: {e}")
+            self.settings_manager.log_error("main_window", f"Execute script failed: {e}")
 
     def _derive_function_name_from_file(self, filename: str) -> str:
         """
@@ -1293,12 +1318,12 @@ class BrowserWindow(QMainWindow):
                 if isinstance(result, str) and result.startswith("__NOFUNC__:"):
                     missing = result.split(":", 1)[1] if ":" in result else func_name
                     self.show_status(f"No function named {missing}() found after loading {script_name}.", level="ERROR")
-                    self.settings_manager.log_error(f"Script function missing: {missing} in {script_name}")
+                    self.settings_manager.log_error("main_window", f"Script function missing: {missing} in {script_name}")
                     return
                 if isinstance(result, str) and result.startswith("__ERR__:"):
                     msg = result.split(":", 1)[1] if ":" in result else "Unknown error"
                     self.show_status(f"{func_name}() threw: {msg}", level="ERROR")
-                    self.settings_manager.log_error(f"Script error {script_name}/{func_name}: {msg}")
+                    self.settings_manager.log_error("main_window", f"Script error {script_name}/{func_name}: {msg}")
                     return
 
                 # Success (result may be None if the function returns nothing)
@@ -1309,10 +1334,10 @@ class BrowserWindow(QMainWindow):
                         text = text[:117] + "..."
                     preview = f" (result: {text})"
                 self.show_status(f"Executed {func_name}() from {script_name}{preview}", level="INFO")
-                self.settings_manager.log_system_event("Script executed", f"{script_name} -> {func_name}()")
+                self.settings_manager.log_system_event("main_window", "Script executed", f"{script_name} -> {func_name}()")
             except Exception as e:
                 self.show_status(f"Execution callback error: {e}", level="ERROR")
-                self.settings_manager.log_error(f"Script callback error: {e}", script_name)
+                self.settings_manager.log_error("main_window", f"Script callback error: {e}", script_name)
         return cb
 
     def open_scripts_folder(self):
@@ -1332,10 +1357,10 @@ class BrowserWindow(QMainWindow):
                 subprocess.run(["xdg-open", folder])
 
             self.show_status(f"Opened scripts folder → {folder}", level="INFO")
-            self.settings_manager.log_system_event("Scripts folder opened", folder)
+            self.settings_manager.log_system_event("main_window", "Scripts folder opened", folder)
         except Exception as e:
             self.show_status(f"Failed to open scripts folder: {e}", level="ERROR")
-            self.settings_manager.log_error(f"Open scripts folder failed: {e}")
+            self.settings_manager.log_error("main_window", f"Open scripts folder failed: {e}")
 
 
     def _user_agent_from_settings(self) -> str | None:
@@ -1377,7 +1402,7 @@ class BrowserWindow(QMainWindow):
             self.settings_manager.save()
             self.settings_manager.log("[SYSTEM] Window geometry/state saved cleanly", "SYSTEM")
         except Exception as e:
-            self.settings_manager.log_error(f"Failed to save geometry/state: {e}")
+            self.settings_manager.log_error("main_window", f"Failed to save geometry/state: {e}")
 
     def restore_window_geometry(self):
         try:
@@ -1400,7 +1425,7 @@ class BrowserWindow(QMainWindow):
             if isinstance(s_b64, str) and s_b64:
                 self.restoreState(self._b64_to_qba(s_b64))
         except Exception as e:
-            self.settings_manager.log_error(f"Failed to restore geometry/state: {e}")
+            self.settings_manager.log_error("main_window", f"Failed to restore geometry/state: {e}")
 
 
 # --- Optional manual run for smoke testing -----------------------------------

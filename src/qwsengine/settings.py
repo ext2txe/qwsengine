@@ -1,22 +1,48 @@
-import json
-import shutil
-from pathlib import Path
-from PySide6.QtCore import QStandardPaths, QByteArray, QRect, Qt
-from PySide6.QtWebEngineCore import QWebEngineProfile
-from PySide6.QtNetwork import QNetworkProxy, QNetworkProxyFactory
+from __future__ import annotations
 
-from .request_interceptor import HeaderInterceptor
-from .logging_utils import LogManager
+from pathlib import Path
+import json
+import os
+from typing import Any, Dict, Optional
+
+from PySide6.QtCore import QStandardPaths
+from PySide6.QtWebEngineCore import QWebEngineProfile
+
+# Single source of truth for app identity & paths
+from .app_info import app_dir, SETTINGS_PATH, CACHE_DIR, DATA_DIR
+
+# Optional imports (don’t crash if not present)
+try:
+    from .log_manager import LogManager  # your existing logger (if any)
+except Exception:
+    LogManager = None  # type: ignore
+
 
 class SettingsManager:
-    def __init__(self):
-        # Paths
-        self.config_dir = Path(QStandardPaths.writableLocation(QStandardPaths.ConfigLocation)) / "qwsengine"
-        self.config_dir.mkdir(parents=True, exist_ok=True)
-        self.config_file = self.config_dir / "settings.json"
+    """
+    App settings + persistent QWebEngineProfile.
+    Preferred: self.web_profile
+    Back-compat: self.profile (property) and _setup_web_profile()
+    """
+    # Legacy → current keys
+    _KEY_ALIASES = {
+        "window/geometry":      "window_geometry",
+        "window/maximized":     "window_maximized",
+        "window/fullscreen":    "window_fullscreen",
+        "window/normal_rect":   "window_normal_rect",
+        # add more mappings here if your code uses other "a/b" keys
+    }
 
-        # Defaults
-        self.default_settings = {
+    def __init__(self) -> None:
+        # ----- directories (used by logger & others) -----------------------
+        self.config_dir: Path = app_dir(QStandardPaths.AppConfigLocation)
+        self.cache_dir: Path  = CACHE_DIR
+        self.data_dir: Path   = DATA_DIR
+        self.logs_dir: Path = self.config_dir / "logs"
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+
+        # ----- Defaults (EXACTLY as provided) ------------------------------
+        self.default_settings: Dict[str, Any] = {
             "start_url": "https://codaland.com/ipcheck.php",
             "window_width": 1024,
             "window_height": 768,
@@ -40,507 +66,561 @@ class SettingsManager:
             "proxy_user": "",
             "proxy_password": "",
 
-            #if accept_language is "", then headers will not be  inserted
-            "accept_language": "en-US,en;q=0.9",           # e.g. "en-US,en;q=0.9" or "de-DE,de;q=0.9,en;q=0.8"
+            # if accept_language is "", then headers will not be inserted
+            "accept_language": "en-US,en;q=0.9",
             "send_dnt": False,
             "spoof_chrome_client_hints": False,
+
+            "headers_global": {},         # {"X-Api-Key": "abc123", ...}
+            "headers_per_host": {},       # {"example.com": {"X-Site": "ex"}}
         }
 
-        # Load settings JSON first
-        self.settings = self._load_settings()
+        # ----- Load settings JSON, merged with defaults --------------------
+        self.settings: Dict[str, Any] = self._load_settings()
 
-        # Logging
-        self.log_manager = LogManager(self.config_dir) if self.settings.get("logging_enabled", True) else None
-
-        # Persistent WebEngine profile (applies UA, cache, cookies)
-        self.web_profile = self._setup_web_profile()
-
-
-    # ---------------- Persistence ----------------
-    # -----------------------------
-    # Settings (JSON-backed)
-    # -----------------------------
-    def _load_settings(self) -> dict:
-        data = {}
-        try:
-            if self.config_file.exists():
-                with self.config_file.open("r", encoding="utf-8") as f:
-                    data = json.load(f) or {}
-        except Exception as e:
-            # Backup corrupted file and continue with defaults
+        # ----- Logging -----------------------------------------------------
+        self.log_manager = None
+        if self.settings.get("logging_enabled", True) and LogManager is not None:
             try:
-                backup = self.config_dir / f"settings.bad.{int(__import__('time').time())}.json"
-                self.config_file.replace(backup)  # atomic move
-                if hasattr(self, "log_manager") and self.log_manager:
-                    self.log_manager.log_error(f"settings.json was invalid ({e}); moved to {backup.name} and regenerated.")
-                else:
-                    print(f"Error reading settings: {e}\nBacked up to: {backup}")
+                self.log_manager = LogManager(self.config_dir)
             except Exception:
-                # Fall back to simple rename if replace fails
-                try:
-                    self.config_file.rename(self.config_file.with_suffix(".bad.json"))
-                except Exception:
-                    pass
-            data = {}
+                self.log_manager = None  # don’t crash if logger fails
 
-        # Merge onto defaults (keep falsy values)
-        merged = dict(self.default_settings)
-        for k, v in data.items():
-            if v is not None:
-                merged[k] = v
+        # ----- (Optional) process-wide proxy setup BEFORE WebEngine starts --
+        # NOTE: QtWebEngine honors Chromium flags; QtNetwork proxies do not affect it.
+        # We set best-effort env flags here. If you prefer, move this earlier in app boot.
+        self.apply_proxy_settings()
 
-        # Persist merged to ensure new keys are written
-        try:
-            self.config_dir.mkdir(parents=True, exist_ok=True)
-            with self.config_file.open("w", encoding="utf-8") as f:
-                json.dump(merged, f, indent=2)
-        except Exception as e:
-            if hasattr(self, "log_manager") and self.log_manager:
-                self.log_manager.log_error(f"Failed to write settings.json: {e}")
+        # ----- Persistent WebEngine profile --------------------------------
+        self.web_profile: QWebEngineProfile = self._setup_web_profile()
 
-        return merged
-
-    # ---------- JSON persistence (private) ----------
-
-    def save_settings(self) -> bool:
-        """
-        Legacy API: write current self.settings to disk. Returns True/False.
-        """
-        return self._save_settings(self.settings)
-
-
-    def _save_settings(self, obj: dict) -> bool:
-        """
-        Write the provided dict to settings.json. Returns True on success.
-        """
-        try:
-            self.config_dir.mkdir(parents=True, exist_ok=True)
-            with self.config_file.open("w", encoding="utf-8") as f:
-                json.dump(obj, f, indent=2, ensure_ascii=False)
-            return True
-        except Exception as e:
-            # Use your logger if available; fall back to print
-            if hasattr(self, "log_manager") and self.log_manager:
-                self.log_manager.log_error(f"Failed to save settings.json: {e}")
-            else:
-                print(f"Error saving settings: {e}")
-            return False
-
-    def load_settings(self) -> dict:
-        """
-        Legacy API: reload from disk and return the merged dict.
-        """
-        self.settings = self._load_settings()
-        return self.settings
-
-    def _load_settings(self) -> dict:
-        """
-        Read settings.json, merge with defaults, and write back the merged file.
-        """
-        data = {}
-        try:
-            if self.config_file.exists():
-                with self.config_file.open("r", encoding="utf-8") as f:
-                    data = json.load(f) or {}
-        except Exception as e:
-            if hasattr(self, "log_manager") and self.log_manager:
-                self.log_manager.log_error(f"Failed to read settings.json: {e}")
-            else:
-                print(f"Error reading settings: {e}")
-            data = {}
-
-        merged = dict(self.default_settings)
-        for k, v in data.items():
-            # keep explicit falsy values (0, False, "")
-            if v is not None:
-                merged[k] = v
-
-        # Persist merged to include any new default keys
-        self._save_settings(merged)
-        return merged
-
-    # ---------- JSON persistence (private) ----------
-
-    def _save_settings_old(self) -> bool:
-        try:
-            self.config_dir.mkdir(parents=True, exist_ok=True)
-            with open(self.config_file, 'w', encoding="utf-8") as f:
-                json.dump(self.settings, f, indent=2)
-            return True
-        except Exception as e:
-            print(f"Error saving settings: {e}")
-            return False
-
-    # Optional ultra-short alias if some code calls 'save()'
-    def save(self):
-        self.save_settings()
-
-    def _load_settings_into_cache(self):
-        """Pull persisted values into a simple dict cache once at startup."""
-        def _get(key, default=""):
-            val = self._qsettings.value(key, default)
-            return val if val is not None else default
-
-        # Normalize on 'user_agent' key; keep a fallback for older builds.
-        ua = _get("user_agent", "")
-        if not ua:
-            ua = _get("userAgent", "")  # backward compatibility
-
-        self._cache["user_agent"] = ua
-        # ... load any other settings you need similarly
-
-    # ---------------- Accessors ----------------
-    def get(self, key, default=None):
-        """
-        Read a value from the loaded settings dict, falling back to defaults.
-        Does not use any _cache object.
-        """
-        if self.settings is None:
-            # extremely early use before _load_settings
-            return self.default_settings.get(key, default)
-        return self.settings.get(key, self.default_settings.get(key, default))
-
-    def set(self, key, value):
-        """
-        Update settings dict and persist to JSON.
-        """
-        self.settings[key] = value
-        self._save_settings(self.settings)
-
-    def update(self, new_settings: dict) -> None:
-        self.settings.update(new_settings)
-
-    # ---------------- Logging Proxies ----------------
-    def log(self, message, level="INFO"):
-        if self.log_manager:
-            self.log_manager.log(message, level)
-
-    def log_navigation(self, url, title="", tab_id=None):
-        if self.log_manager and self.get("log_navigation", True):
-            self.log_manager.log_navigation(url, title, tab_id)
-
-    def log_tab_action(self, action, tab_id=None, details=""):
-        if self.log_manager and self.get("log_tab_actions", True):
-            self.log_manager.log_tab_action(action, tab_id, details)
-
-    def log_error(self, error_msg, context=""):
-        if self.log_manager and self.get("log_errors", True):
-            self.log_manager.log_error(error_msg, context)
-
-    def log_system_event(self, event, details=""):
-        if self.log_manager:
-            self.log_manager.log_system_event(event, details)
-
-    def get_log_file_path(self):
-        if self.log_manager:
-            return self.log_manager.get_log_file_path()
-        return None
-
-    # ---------------- User Agent  ----------------
-    def apply_user_agent(self) -> None:
-        """Apply the configured UA immediately to the current profile."""
-        try:
-            profile = self.get_web_profile()
-            ua = self.get("user_agent", "").strip()
-            if ua:
-                profile.setHttpUserAgent(ua)
-                self.log_system_event("Custom User-Agent applied", ua)
-            else:
-                # Reset to original default UA captured at startup
-                default_ua = getattr(self, "initial_user_agent", profile.httpUserAgent())
-                profile.setHttpUserAgent(default_ua)
-                self.log_system_event("User-Agent reset to default", default_ua)
-        except Exception as e:
-            self.log_error(f"apply_user_agent failed: {e}")
-
-    def get_user_agent(self) -> str:
-        try:
-            return self.get_web_profile().httpUserAgent()
-        except Exception:
-            return self.get("user_agent", "") or ""
-
-    def set_user_agent(self, new_ua: str):
-        new_ua = (new_ua or "").strip()
-        self.set("user_agent", new_ua)  # persists to JSON
-        if self.web_profile:
-            self.web_profile.setHttpUserAgent(new_ua)
-            if self.log_manager:
-                self.log_manager.log(f"UA applied at runtime: {new_ua or '(default)'}", "SYSTEM")
-
-    # ---------------- Web Profile ----------------
-    # -----------------------------
-    # Web profile (Chromium storage)
-    # -----------------------------
-
-    def _setup_web_profile(self) -> QWebEngineProfile:
-        profile_dir = self.config_dir / "profile"
-        profile_dir.mkdir(parents=True, exist_ok=True)
-
-        profile = QWebEngineProfile("QWSEnginePersistent")
-
-        # Storage & cache paths
-        profile.setPersistentStoragePath(str(profile_dir.resolve()))
-        (profile_dir / "cache").mkdir(exist_ok=True)
-        profile.setCachePath(str((profile_dir / "cache").resolve()))
-        (profile_dir / "downloads").mkdir(exist_ok=True)
-        profile.setDownloadPath(str((profile_dir / "downloads").resolve()))
-
-        # Cookie persistence
-        pcp = QWebEngineProfile.PersistentCookiesPolicy
-        policy = getattr(pcp, "ForcePersistentCookies", pcp.AllowPersistentCookies) \
-                if self.get("persist_cookies", True) else pcp.NoPersistentCookies
-        profile.setPersistentCookiesPolicy(policy)
-
-        # Cache mode (best-effort)
-        try:
-            if self.get("persist_cache", True):
-                profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.DiskHttpCache)
-            else:
-                profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.MemoryHttpCache)
-        except Exception:
-            pass
-
-        # User-Agent (global)
-        ua = (self.get("user_agent", "") or "").strip()
-        if ua:
-            profile.setHttpUserAgent(ua)
-
-        # Accept-Language (global, if supported by your Qt build)
-        al = (self.get("accept_language", "") or "").strip()
-        try:
-            if al and hasattr(profile, "setHttpAcceptLanguage"):
-                profile.setHttpAcceptLanguage(al)  # Qt 6.5+ typically
-        except Exception:
-            pass
-
-        # Install header interceptor (per-request overrides)
-        self._header_interceptor = HeaderInterceptor(self)
-        try:
-            profile.setUrlRequestInterceptor(self._header_interceptor)
-        except Exception:
-            # Older Qt builds used .setRequestInterceptor; keep this for safety
-            if hasattr(profile, "setRequestInterceptor"):
-                profile.setRequestInterceptor(self._header_interceptor)
-
-        # Proxies (if you have this function)
-        try:
-            self.apply_proxy_settings()
-        except Exception as e:
-            if self.log_manager:
-                self.log_manager.log_error(f"apply_proxy_settings failed: {e}")
-
-        # (Optional) Log
-        if self.log_manager:
-            try:
-                self.log_manager.log(f"UA on startup: {profile.httpUserAgent()}", "SYSTEM")
-                if al:
-                    self.log_manager.log(f"Accept-Language on startup: {al}", "SYSTEM")
-            except Exception:
-                pass
-
-        return profile
-
-
-    def _setup_web_profile_original(self) -> QWebEngineProfile:
-        profile_dir = self.config_dir / "profile"
-        profile_dir.mkdir(parents=True, exist_ok=True)
-
-        profile = QWebEngineProfile("QWSEnginePersistent")
-
-        # Storage paths
-        profile.setPersistentStoragePath(str(profile_dir.resolve()))
-        cache_dir = profile_dir / "cache"
-        cache_dir.mkdir(exist_ok=True)
-        profile.setCachePath(str(cache_dir.resolve()))
-        dl_dir = profile_dir / "downloads"
-        dl_dir.mkdir(exist_ok=True)
-        profile.setDownloadPath(str(dl_dir.resolve()))
-
-        # Cookies persistence
-        pcp = QWebEngineProfile.PersistentCookiesPolicy
-        if self.get("persist_cookies", True):
-            policy = getattr(pcp, "ForcePersistentCookies", pcp.AllowPersistentCookies)
-        else:
-            policy = pcp.NoPersistentCookies
-        profile.setPersistentCookiesPolicy(policy)
-
-        # Cache persistence (best-effort; not all bindings expose this)
-        try:
-            if self.get("persist_cache", True):
-                profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.DiskHttpCache)
-            else:
-                profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.MemoryHttpCache)
-        except Exception:
-            pass
-
-        # User-Agent from settings
-        ua = (self.get("user_agent", "") or "").strip()
-        if ua:
-            profile.setHttpUserAgent(ua)
-
-        # Optional logging
-        if self.log_manager:
-            try:
-                self.log_manager.log(f"UA on startup: {profile.httpUserAgent()}", "SYSTEM")
-                self.log_manager.log(f"Profile storage: {profile.persistentStoragePath()}", "SYSTEM")
-                self.log_manager.log(f"Cache path: {profile.cachePath()}", "SYSTEM")
-                self.log_manager.log(f"Download path: {profile.downloadPath()}", "SYSTEM")
-            except Exception:
-                pass
-
-        # If you apply proxies globally, call your existing method here:
-        try:
-            self.apply_proxy_settings()
-        except Exception as e:
-            if self.log_manager:
-                self.log_manager.log_error(f"apply_proxy_settings failed: {e}")
-
-        return profile
-
-    def get_web_profile(self):
+    # ----------------------------------------------------------------------
+    # Back-compat surface
+    @property
+    def profile(self) -> QWebEngineProfile:
         return self.web_profile
 
+    def _setup_web_profile(self) -> QWebEngineProfile:
+        """Alias kept for backward compatibility."""
+        return self._create_web_profile()
 
-    def apply_proxy_settings(self) -> None:
-        """Apply proxy settings from settings.json to the entire app."""
+
+    # ----------------------------------------------------------------------
+    # Public getters
+    def start_url(self) -> str:
+        return self.settings.get("start_url", "about:blank")
+
+    def user_agent(self) -> Optional[str]:
+        ua = self.settings.get("user_agent", "")
+        return ua or None
+
+    def accept_language(self) -> Optional[str]:
+        al = self.settings.get("accept_language", "")
+        return al or None
+
+    def extra_headers_global(self) -> Dict[str, str]:
+        return dict(self.settings.get("headers_global", {}) or {})
+
+    def extra_headers_per_host(self) -> Dict[str, Dict[str, str]]:
+        return dict(self.settings.get("headers_per_host", {}) or {})
+
+
+    # ----------------------------------------------------------------------
+    # Logging shims (so existing calls work even if LogManager is None)
+    def log_tab_action(self, action: str, tab_id: Any, note: str = "") -> None:
+        if self.log_manager and self.settings.get("log_tab_actions", True):
+            try:
+                self.log_manager.log_tab_action(action, tab_id, note)
+            except Exception:
+                pass
+
+    def log_navigation(self, url: str, title: str = "", meta: Optional[dict] = None) -> None:
+        if self.log_manager and self.settings.get("log_navigation", True):
+            try:
+                self.log_manager.log_navigation(url, title, meta or {})
+            except Exception:
+                pass
+
+    def log_info(self, where: str, message: str, meta: dict | None = None) -> None:
+        if self.log_manager:
+            try:
+                if hasattr(self.log_manager, "log_info"):
+                    self.log_manager.log_info(where, message, meta or {})
+                else:
+                    # fallback: use navigation/info-like channel
+                    self.log_manager.log_navigation(where, message, meta or {})
+            except Exception:
+                pass
+
+    def log_debug(self, where: str, message: str, meta: dict | None = None) -> None:
+        if self.log_manager and hasattr(self.log_manager, "log_debug"):
+            try:
+                self.log_manager.log_debug(where, message, meta or {})
+            except Exception:
+                pass
+
+    def log_error(self, where: str, message: str, meta: dict | None = None) -> None:
+        if self.log_manager:
+            try:
+                self.log_manager.log_error(where, message, meta or {})
+            except Exception:
+                pass
+
+    def log_system_event(self, where: str, message: str, meta: dict | None = None) -> None:
+        """Semantic alias for app/system messages; same signature."""
+        self.log_info(where, message, meta)
+
+    def get_log_dir(self) -> Path:
+        """Directory where log files are stored."""
+        return self.logs_dir
+
+    def get_log_file_path(self, ensure_exists: bool = False) -> Path | None:
+        """
+        Return the *current* log file path if known.
+        Falls back to a conventional file in the logs dir.
+        """
+        # If your LogManager exposes a path, prefer it:
+        if self.log_manager:
+            # common variants — use whatever your LogManager actually has
+            for attr in ("current_log_path", "log_path", "path"):
+                if hasattr(self.log_manager, attr):
+                    p = getattr(self.log_manager, attr)
+                    try:
+                        p = Path(p)  # in case it's a string
+                    except Exception:
+                        p = None
+                    else:
+                        if ensure_exists:
+                            p.parent.mkdir(parents=True, exist_ok=True)
+                            p.touch(exist_ok=True)
+                        return p
+            # method-style accessors
+            for meth in ("get_current_log_path", "get_log_file_path"):
+                if hasattr(self.log_manager, meth):
+                    try:
+                        p = Path(getattr(self.log_manager, meth)())
+                        if ensure_exists:
+                            p.parent.mkdir(parents=True, exist_ok=True)
+                            p.touch(exist_ok=True)
+                        return p
+                    except Exception:
+                        pass
+
+        # Fallback: conventional single-file log
+        fallback = self.logs_dir / "qwsengine.log"
+        if ensure_exists:
+            fallback.parent.mkdir(parents=True, exist_ok=True)
+            fallback.touch(exist_ok=True)
+        return fallback
+
+
+    # ----------------------------------------------------------------------
+    # Settings IO
+    def _load_settings(self) -> Dict[str, Any]:
+        data: Dict[str, Any] = {}
+        if SETTINGS_PATH.exists():
+            try:
+                data = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+            except Exception:
+                data = {}
+
+        # shallow merge + one-level nested dicts
+        merged = dict(self.default_settings)
+        for k, v in data.items():
+            if isinstance(v, dict) and isinstance(merged.get(k), dict):
+                merged[k] = {**merged[k], **v}
+            else:
+                merged[k] = v
+        return merged
+
+    def save_settings(self) -> bool:
+        """Persist settings atomically; verify; return True on success."""
         try:
-            mode = (self.get("proxy_mode", "system") or "system").lower()
-            if mode == "none":
+            SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = SETTINGS_PATH.with_suffix(".tmp")
+
+            # 1) write tmp
+            with tmp_path.open("w", encoding="utf-8") as f:
+                json.dump(self.settings, f, indent=2)
+
+            # 2) fsync to reduce Windows lock weirdness
+            try:
+                f.flush()  # type: ignore[name-defined]
+                os_fno = f.fileno()  # type: ignore[name-defined]
+                import os
+                os.fsync(os_fno)
+            except Exception:
+                pass  # best effort
+
+            # 3) replace
+            tmp_path.replace(SETTINGS_PATH)
+
+            # 4) verify read-back
+            try:
+                loaded = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+                # minimal check: a field we just set exists (else skip)
+            except Exception as e:
+                self.log_error("SettingsManager", f"Settings saved but verify failed: {e}")
+                return False
+
+            return True
+
+        except Exception as e:
+            self.log_error("SettingsManager", f"Failed to save settings to file: {e}")
+            return False
+
+    def apply_user_agent(self, ua: str | None = None) -> bool:
+        """
+        Back-compat for settings_dialog.py.
+        - If `ua` is provided: set it, save settings, and apply.
+        - If `ua` is None: just apply the current value from settings.
+        Returns True if settings were saved (or no save needed), False on save failure.
+        """
+        if ua is not None:
+            self.settings["user_agent"] = ua or ""
+            ok = self.save_settings()
+        else:
+            ok = True  # nothing to persist
+
+        # Re-apply UA + related headers/interceptor to the live profile
+        try:
+            self.apply_network_overrides()
+        except Exception as e:
+            self.log_error("SettingsManager", f"Failed to apply user-agent: {e}")
+
+        return ok
+
+    def apply_proxy_settings(self) -> bool:
+        """
+        Apply current proxy_* settings to the running process.
+        Returns True if WebEngine proxy flags changed (i.e., restart recommended).
+        Notes:
+        - QtWebEngine reads proxy via Chromium flags at process start.
+            We set QTWEBENGINE_CHROMIUM_FLAGS here; a restart is typically required
+            for WebEngine to fully adopt changes.
+        - QtNetwork traffic (requests via QtNetwork) is applied live below.
+        """
+        mode = (self.settings.get("proxy_mode") or "system").lower()
+        ptype = (self.settings.get("proxy_type") or "http").lower()
+        host  = self.settings.get("proxy_host") or ""
+        port  = int(self.settings.get("proxy_port") or 0)
+        user  = self.settings.get("proxy_user") or ""
+        pwd   = self.settings.get("proxy_password") or ""
+
+        flags = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "").strip()
+        parts = flags.split()
+        changed = False
+
+        def add_flag(s: str):
+            nonlocal parts, changed
+            if s not in parts:
+                parts.append(s)
+                changed = True
+
+        def remove_flag(prefix: str):
+            nonlocal parts, changed
+            new = [p for p in parts if not p.startswith(prefix)]
+            if new != parts:
+                parts = new
+                changed = True
+
+        # --- Configure Chromium flags for WebEngine ---
+        if mode == "system":
+            remove_flag("--no-proxy-server")
+            remove_flag("--proxy-server=")
+        elif mode == "none":
+            add_flag("--no-proxy-server")
+            remove_flag("--proxy-server=")
+        elif mode == "manual":
+            scheme = "socks5" if "socks" in ptype else "http"
+            if host and port:
+                auth = f"{user}:{pwd}@" if user else ""
+                remove_flag("--no-proxy-server")
+                remove_flag("--proxy-server=")  # clear any prior value
+                add_flag(f"--proxy-server={scheme}://{auth}{host}:{port}")
+            else:
+                # incomplete manual config → fall back to system
+                remove_flag("--no-proxy-server")
+                remove_flag("--proxy-server=")
+
+        # Persist env var
+        os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = " ".join(parts).strip()
+
+        # --- Apply QtNetwork proxy live (this affects QtNetwork, not WebEngine) ---
+        try:
+            from PySide6.QtNetwork import QNetworkProxy, QNetworkProxyFactory
+            if mode == "system":
+                QNetworkProxyFactory.setUseSystemConfiguration(True)
+                QNetworkProxy.setApplicationProxy(QNetworkProxy())  # reset explicit proxy
+            elif mode == "none":
                 QNetworkProxyFactory.setUseSystemConfiguration(False)
                 QNetworkProxy.setApplicationProxy(QNetworkProxy(QNetworkProxy.NoProxy))
-                self.log_system_event("Proxy disabled")
-                return
-
-            if mode == "system":
-                # Use OS/system proxy (PAC, etc.)
-                QNetworkProxyFactory.setUseSystemConfiguration(True)
-                QNetworkProxy.setApplicationProxy(QNetworkProxy(QNetworkProxy.DefaultProxy))
-                self.log_system_event("Using system proxy")
-                return
-
-            if mode == "manual":
-                ptype = (self.get("proxy_type", "http") or "http").lower()
-                qt_type = QNetworkProxy.HttpProxy if ptype == "http" else QNetworkProxy.Socks5Proxy
-                host = self.get("proxy_host", "")
-                port = int(self.get("proxy_port", 0) or 0)
-                proxy = QNetworkProxy(qt_type, host, port)
-
-                user = self.get("proxy_user", "")
-                pwd  = self.get("proxy_password", "")
-                if user or pwd:
-                    proxy.setUser(user)
-                    proxy.setPassword(pwd)
-
+            elif mode == "manual" and host and port:
                 QNetworkProxyFactory.setUseSystemConfiguration(False)
-                QNetworkProxy.setApplicationProxy(proxy)
-                pretty = f"{ptype}://{host}:{port}"
-                self.log_system_event("Manual proxy applied", pretty)
+                proxy_type = QNetworkProxy.Socks5Proxy if "socks" in ptype else QNetworkProxy.HttpProxy
+                qp = QNetworkProxy(proxy_type, host, port, user, pwd)
+                QNetworkProxy.setApplicationProxy(qp)
+        except Exception:
+            # If QtNetwork isn't used, ignore
+            pass
+
+        # If flags changed, a restart is recommended for WebEngine to pick them up
+        return changed
+
+
+    def set_proxy_settings(
+        self,
+        *,
+        mode: str,
+        proxy_type: str | None = None,
+        host: str | None = None,
+        port: int | None = None,
+        user: str | None = None,
+        password: str | None = None,
+        persist: bool = True,
+        apply_now: bool = True,
+    ) -> bool:
+        """
+        Update settings.json with new proxy config and apply.
+        Returns True if saved successfully (not whether restart is needed).
+        """
+        self.settings["proxy_mode"] = (mode or "system").lower()
+        if proxy_type is not None:
+            self.settings["proxy_type"] = proxy_type
+        if host is not None:
+            self.settings["proxy_host"] = host
+        if port is not None:
+            self.settings["proxy_port"] = int(port)
+        if user is not None:
+            self.settings["proxy_user"] = user
+        if password is not None:
+            self.settings["proxy_password"] = password
+
+        ok = True
+        if persist:
+            ok = self.save_settings()
+
+        if apply_now:
+            self.apply_proxy_settings()
+
+        return ok
+
+
+    # --- add these helper methods inside SettingsManager ---
+    def _normalize_key(self, key: str) -> str:
+        """
+        Translate legacy slash-separated keys to our flat JSON keys.
+        Fallback: replace '/' with '_' if no explicit alias is present.
+        """
+        if key in self._KEY_ALIASES:
+            return self._KEY_ALIASES[key]
+        if "/" in key:
+            cand = key.replace("/", "_")
+            if cand in self.settings:
+                return cand
+        return key
+
+    def get(self, key: str, default=None):
+        """
+        Back-compat getter (QSettings-like). Supports 'a/b' keys.
+        """
+        k = self._normalize_key(key)
+        return self.settings.get(k, default)
+
+    def set(self, key: str, value, persist: bool = True):
+        """
+        Back-compat setter (QSettings-like). Supports 'a/b' keys.
+        """
+        k = self._normalize_key(key)
+        self.settings[k] = value
+        if persist:
+            self.save_settings()
+
+    def set_user_agent(self, ua: str) -> bool:
+        self.settings["user_agent"] = ua or ""
+        ok = self.save_settings()
+        # apply regardless; failure to apply != failure to save
+        self.apply_network_overrides()
+        return ok
+
+
+    # ----------------------------------------------------------------------
+    # Proxy (best-effort for QtWebEngine via Chromium flags)
+    def _maybe_configure_process_proxy(self) -> None:
+        mode = (self.settings.get("proxy_mode") or "system").lower()
+        if mode == "system":
+            return  # use OS defaults
+        flags = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
+
+        if mode == "none":
+            if "--no-proxy-server" not in flags:
+                flags = (flags + " --no-proxy-server").strip()
+            os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = flags
+            return
+
+        if mode == "manual":
+            ptype = (self.settings.get("proxy_type") or "http").lower()  # "http" | "socks5"
+            host  = self.settings.get("proxy_host") or ""
+            port  = int(self.settings.get("proxy_port") or 0)
+            user  = self.settings.get("proxy_user") or ""
+            pwd   = self.settings.get("proxy_password") or ""
+            if not host or not port:
                 return
 
-            self.log_error(f"Unknown proxy_mode: {mode}")
+            # proxy URL format: scheme://[user[:pwd]@]host:port
+            scheme = "socks5" if "socks" in ptype else "http"
+            auth   = f"{user}:{pwd}@" if user else ""
+            proxy_url = f"{scheme}://{auth}{host}:{port}"
 
-        except Exception as e:
-            self.log_error(f"apply_proxy_settings failed: {e}")
+            piece = f"--proxy-server={proxy_url}"
+            if piece not in flags:
+                flags = (flags + " " + piece).strip()
+            os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = flags
 
-    # ---------------- Browser Data ----------------
-    def clear_browser_data(self) -> bool:
-        """
-        Clear cookies, cache, downloads, and other stored browser data
-        by deleting the profile directory contents.
-        """
+    # ----------------------------------------------------------------------
+    # WebEngine profile
+    def _create_web_profile(self) -> QWebEngineProfile:
+        profile = QWebEngineProfile(self.__class__.__name__)  # named profile
+
+        # Cache & persistent storage
+        cache_dir   = self.cache_dir / "web_cache"
+        storage_dir = self.data_dir  / "web_storage"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        storage_dir.mkdir(parents=True, exist_ok=True)
+
+        # Persist cache?
         try:
-            profile_dir = self.config_dir / "profile"
-            if not profile_dir.exists():
-                return True
-            for child in profile_dir.iterdir():
+            # Qt 6: enum lives on QWebEngineProfile
+            if self.settings.get("persist_cache", True):
+                profile.setHttpCacheType(QWebEngineProfile.DiskHttpCache)
+                profile.setCachePath(str(cache_dir))
+            else:
+                profile.setHttpCacheType(QWebEngineProfile.MemoryHttpCache)
+        except Exception:
+            # Fallback: set path only if persisting
+            if self.settings.get("persist_cache", True):
+                profile.setCachePath(str(cache_dir))
+
+        # Persist cookies & HTML5 storage?
+        if self.settings.get("persist_cookies", True):
+            try:
+                profile.setPersistentCookiesPolicy(QWebEngineProfile.ForcePersistentCookies)
+            except Exception:
                 try:
-                    if child.is_dir():
-                        shutil.rmtree(child, ignore_errors=True)
-                    else:
-                        child.unlink(missing_ok=True)
-                except Exception as e:
-                    if self.log_manager:
-                        self.log_manager.log_error(f"Failed to remove {child}: {e}")
-            if self.log_manager:
-                self.log_manager.log_system_event("Browser data cleared")
-            return True
-        except Exception as e:
-            if self.log_manager:
-                self.log_manager.log_error(f"Error clearing browser data: {e}")
-            return False
+                    profile.setPersistentCookiesPolicy(QWebEngineProfile.AllowPersistentCookies)
+                except Exception:
+                    pass
+            profile.setPersistentStoragePath(str(storage_dir))
+        else:
+            try:
+                profile.setPersistentCookiesPolicy(QWebEngineProfile.NoPersistentCookies)
+            except Exception:
+                pass
+            # leave storage path unset for purely in-memory session
 
-    # ---------------- Browser Window Geometry ----------------
-    def restore_window_geometry(self, widget) -> bool:
+        # User-Agent
+        ua = self.user_agent()
+        if ua:
+            try:
+                profile.setHttpUserAgent(ua)
+            except Exception:
+                pass
+
+        # Accept-Language (Qt ≥ 6.5) or via interceptor headers
+        al = self.accept_language()
+        if al:
+            try:
+                # Available in newer Qt; if not, our interceptor will handle headers
+                profile.setHttpAcceptLanguage(al)  # type: ignore[attr-defined]
+            except Exception:
+                pass
+
+        # Request interceptor: headers (global/per-host), DNT, client hints spoofing
+        self._install_request_interceptor(profile)
+
+        return profile
+
+    def _install_request_interceptor(self, profile: QWebEngineProfile) -> None:
         """
-        Restore last saved window geometry and state.
-        Returns True if something was applied.
-        """
-        applied = False
-        try:
-            # 1) If we have a remembered normal rect, set that first (so un-maximizing later is correct).
-            nr = self.get("window_normal_rect")
-            if isinstance(nr, list) and len(nr) == 4:
-                x, y, w, h = nr
-                if all(isinstance(v, int) for v in (x, y, w, h)) and w > 0 and h > 0:
-                    widget.setGeometry(QRect(x, y, w, h))
-                    applied = True
-
-            # 2) If we have Qt's serialized geometry, try that too.
-            geo_b64 = self.get("window_geometry", "")
-            if geo_b64:
-                ba = QByteArray.fromBase64(geo_b64.encode("ascii"))
-                if not ba.isEmpty():
-                    ok = widget.restoreGeometry(ba)
-                    applied = applied or ok
-
-            # 3) Apply window state last so it wins visually.
-            if self.get("window_fullscreen", False):
-                widget.setWindowState(Qt.WindowFullScreen)
-                applied = True
-            elif self.get("window_maximized", False):
-                widget.setWindowState(Qt.WindowMaximized)
-                applied = True
-
-            if applied:
-                self.log_system_event("Window geometry restored")
-            else:
-                self.log_system_event("No saved window geometry found (using defaults)")
-            return applied
-
-        except Exception as e:
-            self.log_error(f"restore_window_geometry failed: {e}")
-            return False
-
-    def save_window_geometry(self, widget) -> bool:
-        """
-        Save current window geometry and state (including *normal* rect when maximized/fullscreen).
+        Try existing RequestInterceptor implementations:
+        1) RequestInterceptor(self)  -> full SettingsManager access (preferred)
+        2) RequestInterceptor(headers_dict) -> static headers only
         """
         try:
-            # Serialized Qt geometry (works cross-platform & DPI-aware)
-            ba = widget.saveGeometry()
-            geo_b64 = bytes(ba.toBase64()).decode("ascii")
-            self.set("window_geometry", geo_b64)
+            from .request_interceptor import RequestInterceptor  # your implemented interceptor
+        except Exception:
+            return
 
-            # State
-            is_max = bool(widget.isMaximized())
-            is_full = bool(widget.isFullScreen())
-            self.set("window_maximized", is_max)
-            self.set("window_fullscreen", is_full)
+        # Build a static header baseline (used if ctor wants dict):
+        baseline_headers: Dict[str, str] = {}
+        # Accept-Language (if not empty)
+        if self.settings.get("accept_language"):
+            baseline_headers["Accept-Language"] = self.settings["accept_language"]
+        # DNT
+        if self.settings.get("send_dnt", False):
+            baseline_headers["DNT"] = "1"
+        # Global headers
+        for k, v in (self.settings.get("headers_global") or {}).items():
+            baseline_headers[str(k)] = str(v)
 
-            # Normal rect: if maximized/fullscreen, capture the size it would have when unmaximized
-            if is_full or is_max:
-                nr = widget.normalGeometry()
-            else:
-                nr = widget.geometry()
-            self.set("window_normal_rect", [int(nr.x()), int(nr.y()), int(nr.width()), int(nr.height())])
+        # Optional: spoof a minimal set of UA Client Hints (many servers ignore if UA not matching)
+        if self.settings.get("spoof_chrome_client_hints", False):
+            # Very basic, static hints — your interceptor can refine per-platform
+            baseline_headers.setdefault("Sec-CH-UA", '"Chromium";v="120", "Not.A/Brand";v="24"')
+            baseline_headers.setdefault("Sec-CH-UA-Platform", '"Windows"')
+            baseline_headers.setdefault("Sec-CH-UA-Mobile", "?0")
 
-            ok = self.save_settings()
-            if ok:
-                self.log_system_event("Window geometry saved")
-            else:
-                self.log_error("Failed to save window geometry (settings file)")
-            return ok
+        # Try constructor with SettingsManager first (most powerful)
+        interceptor = None
+        try:
+            interceptor = RequestInterceptor(self)  # type: ignore[arg-type]
+        except Exception:
+            try:
+                interceptor = RequestInterceptor(baseline_headers)  # type: ignore[arg-type]
+            except Exception:
+                interceptor = None
 
-        except Exception as e:
-            self.log_error(f"save_window_geometry failed: {e}")
-            return False
+        if interceptor is not None:
+            try:
+                profile.setUrlRequestInterceptor(interceptor)
+            except Exception:
+                pass
+
+    # ----------------------------------------------------------------------
+    # Live updates (when settings UI changes values)
+    def update_settings(self, patch: Dict[str, Any], persist: bool = True, reconfigure_profile: bool = True) -> None:
+        """Deep-merge patch into self.settings; optionally save & re-apply UA/interceptor."""
+        def deep_merge(dst: Dict[str, Any], src: Dict[str, Any]) -> Dict[str, Any]:
+            for k, v in src.items():
+                if isinstance(v, dict) and isinstance(dst.get(k), dict):
+                    dst[k] = deep_merge(dict(dst[k]), v)
+                else:
+                    dst[k] = v
+            return dst
+
+        self.settings = deep_merge(dict(self.settings), patch)
+        if persist:
+            self.save_settings()
+        if reconfigure_profile:
+            self.apply_network_overrides()
+
+    def apply_network_overrides(self) -> None:
+        """Re-apply UA, language, and interceptor without recreating the profile."""
+        if not isinstance(self.web_profile, QWebEngineProfile):
+            return
+
+        # UA
+        try:
+            self.web_profile.setHttpUserAgent(self.user_agent() or "")
+        except Exception:
+            pass
+
+        # Accept-Language
+        al = self.accept_language() or ""
+        try:
+            self.web_profile.setHttpAcceptLanguage(al)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+        # Interceptor (replace / update)
+        self._install_request_interceptor(self.web_profile)

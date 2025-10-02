@@ -18,12 +18,12 @@ def main():
     app.setApplicationVersion("1.1.0")
     window = BrowserWindow()
     window.show()
-    window.settings_manager.log_system_event("Application fully loaded and visible")
+    window.settings_manager.log_system_event("App", "Application fully loaded and visible")
     try:
         sys.exit(app.exec())
     except Exception as e:
         if hasattr(window, 'settings_manager'):
-            window.settings_manager.log_error(f"Application crashed: {str(e)}")
+            window.settings_manager.log_error("App", f"Application crashed: {str(e)}")
         raise
 
 if __name__ == "__main__":

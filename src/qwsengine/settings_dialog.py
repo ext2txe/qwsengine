@@ -237,7 +237,7 @@ class SettingsDialog(QDialog):
             self.settings_manager.set("proxy_password", self.proxy_password.text())
 
             if self.settings_manager.save_settings():
-                self.settings_manager.apply_user_agent()
+                self.settings_manager.set_user_agent(self.ua_input.text().strip())
                 # Apply immediately (no restart)
                 self.settings_manager.apply_proxy_settings()
 

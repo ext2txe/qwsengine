@@ -99,7 +99,7 @@ class BrowserTab(QWidget):
             if self.settings_manager.get("logging_enabled", True):
                 self.check_cookie_files("after load")
         else:
-            self.settings_manager.log_error(f"Failed to load page: {url}", f"Tab-{self.tab_id}")
+            self.settings_manager.log_error("browser_tab", f"Failed to load page: {url}", f"Tab-{self.tab_id}")
             self.loadFinished.emit(url, False, title)  # NEW
 
     def _on_proxy_auth_required(self, request_url, authenticator, proxy_host):
@@ -109,11 +109,11 @@ class BrowserTab(QWidget):
             if user or pwd:
                 authenticator.setUser(user)
                 authenticator.setPassword(pwd)
-                self.settings_manager.log_system_event("Proxy auth provided", proxy_host)
+                self.settings_manager.log_system_event("browser_tab", "Proxy auth provided", proxy_host)
             else:
-                self.settings_manager.log_system_event("Proxy asked for credentials but none set", proxy_host)
+                self.settings_manager.log_system_event("browser_tab", "Proxy asked for credentials but none set", proxy_host)
         except Exception as e:
-            self.settings_manager.log_error(f"proxy auth handler failed: {e}", f"host={proxy_host}")
+            self.settings_manager.log_error("browser_tab", f"proxy auth handler failed: {e}", f"host={proxy_host}")
 
     def check_cookie_files(self, when: str):
         try:
@@ -159,7 +159,7 @@ class BrowserTab(QWidget):
                         except Exception:
                             pass
         except Exception as e:
-            self.settings_manager.log_error(f"Could not check cookie files {when}: {str(e)}")
+            self.settings_manager.log_error("browser_tab", f"Could not check cookie files {when}: {str(e)}")
 
     def closeEvent(self, event):
         self.settings_manager.log_tab_action("Closed", self.tab_id)
@@ -174,5 +174,5 @@ class BrowserTab(QWidget):
             page = self.browser.page()
             page.toHtml(callback)
         except Exception as e:
-            self.settings_manager.log_error(f"toHtml failed: {e}", f"Tab-{self.tab_id}")
+            self.settings_manager.log_error("browser_tab", f"toHtml failed: {e}", f"Tab-{self.tab_id}")
             callback("")
