@@ -2,12 +2,7 @@ from pathlib import Path
 from PySide6.QtWidgets import QWidget, QVBoxLayout
 from PySide6.QtWebEngineCore import QWebEnginePage
 from PySide6.QtCore import Signal
-from typing import TYPE_CHECKING
 from PySide6.QtWebEngineWidgets import QWebEngineView
-
-# Forward reference (runtime import to avoid circulars)
-from .settings import SettingsManager  # type: ignore
-from .webview import WebView
 
 class WebView(QWebEngineView):
     """Catch new-window requests and ask the main window to create a tab."""

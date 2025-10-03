@@ -1,7 +1,8 @@
 # src/qwsengine/about_dialog.py
 from __future__ import annotations
 from pathlib import Path
-import platform, sys
+import platform
+import sys
 
 from PySide6 import __version__ as PYSIDE_VERSION
 from PySide6.QtCore import Qt, qVersion, QDateTime
@@ -105,9 +106,13 @@ class AboutDialog(QDialog):
     def _parse_webengine_versions(self, ua: str) -> str | None:
         chrom = qtwe = None
         for p in ua.split():
-            if p.startswith("Chrome/"):      chrom = p.split("/", 1)[-1]
-            if p.startswith("QtWebEngine/"): qtwe  = p.split("/", 1)[-1]
+            if p.startswith("Chrome/"):
+                chrom = p.split("/", 1)[-1]
+            if p.startswith("QtWebEngine/"): 
+                qtwe  = p.split("/", 1)[-1]
         bits = []
-        if chrom: bits.append(f"Chromium: {chrom}")
-        if qtwe:  bits.append(f"QtWebEngine: {qtwe}")
+        if chrom: 
+            bits.append(f"Chromium: {chrom}")
+        if qtwe:  
+            bits.append(f"QtWebEngine: {qtwe}")
         return ", ".join(bits) if bits else None

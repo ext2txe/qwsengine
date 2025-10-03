@@ -257,14 +257,15 @@ class SettingsManager:
             tmp_path.replace(SETTINGS_PATH)
 
             # 4) verify read-back
-            try:
-                loaded = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
-                # minimal check: a field we just set exists (else skip)
-            except Exception as e:
-                self.log_error("SettingsManager", f"Settings saved but verify failed: {e}")
-                return False
+            # try:
+            #     # loaded = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+            #     # minimal check: a field we just set exists (else skip)
 
-            return True
+            # except Exception as e:
+            #     self.log_error("SettingsManager", f"Settings saved but verify failed: {e}")
+            #     return False
+
+            # return True
 
         except Exception as e:
             self.log_error("SettingsManager", f"Failed to save settings to file: {e}")

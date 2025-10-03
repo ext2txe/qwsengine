@@ -2,12 +2,14 @@
 from __future__ import annotations
 import os
 from pathlib import Path
+import platform
+import subprocess
 
 from datetime import datetime
 from typing import Optional, Union
 
-from PySide6.QtCore import QUrl, Qt, QSize, QRect, QByteArray, QSettings, QTimer
-from PySide6.QtGui import QAction, QPainter, QImage, QIcon, QKeySequence
+from PySide6.QtCore import QUrl, QRect, QByteArray, QSettings, QTimer, QStandardPaths
+from PySide6.QtGui import QAction, QPainter, QImage, QKeySequence
 from PySide6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -21,6 +23,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QApplication,
     QMessageBox,
+    QToolButton
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from qwsengine.config_manager import app_dir
@@ -32,7 +35,6 @@ from .browser_tab import BrowserTab
 from .settings import SettingsManager
 from .settings_dialog import SettingsDialog
 from qwsengine.about_dialog import AboutDialog
-from PySide6.QtCore import QByteArray
 
 # WebView is referenced for type/behavior expectations; actual class is in BrowserTab.browser
 try:
@@ -82,8 +84,6 @@ class BrowserWindow(QMainWindow):
         # Populate the combo at startup
         self._load_script_list()
 
-        self._init_menus()
-
         
     def configure_profile(profile: QWebEngineProfile):
         cache = app_dir(QStandardPaths.CacheLocation) / "web"
@@ -92,19 +92,9 @@ class BrowserWindow(QMainWindow):
         profile.setPersistentStoragePath(str(storage))
         profile.setPersistentCookiesPolicy(QWebEngineProfile.ForcePersistentCookies)
 
-    def _init_menus(self):
-        menubar = self.menuBar()
-
-        # Help menu (create if not existing)
-        help_menu = menubar.addMenu("&Help")
-        act_about = QAction("&About QWSEngine…", self)
-        act_about.triggered.connect(self.show_about_dialog)
-        help_menu.addAction(act_about)
-
     def show_about_dialog(self):
         dlg = AboutDialog(self)
         dlg.exec()
-
 
     def _setup_ui(self):
         # --- Central layout with tabs --------------------------------------------
@@ -135,8 +125,6 @@ class BrowserWindow(QMainWindow):
 
         # --- BEGIN: Go / + buttons (single-step feature) ---
 
-        from PySide6.QtWidgets import QToolBar, QLineEdit, QToolButton
-        from PySide6.QtCore import QUrl
 
         # Simple toolbar with URL box + Go + +
         self.navbar = QToolBar("Navigation", self)
@@ -178,8 +166,6 @@ class BrowserWindow(QMainWindow):
         # Initial tab
         self._create_initial_tab()
         self.status_bar.showMessage("Loading…", 2000)  # auto-clear after 2s
-
-
         
     def _nav_go(self):
         tab = self.tabs.currentWidget()
@@ -325,6 +311,12 @@ class BrowserWindow(QMainWindow):
         exit_action.setShortcut("Ctrl+Q")
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
+
+        # Help menu (create if not existing)
+        help_menu = menu_bar.addMenu("&Help")
+        act_about = QAction("&About QWSEngine…", self)
+        act_about.triggered.connect(self.show_about_dialog)
+        help_menu.addAction(act_about)
 
         return menu_bar
 
@@ -610,7 +602,8 @@ class BrowserWindow(QMainWindow):
             img = pm.toImage()
 
             dpr = self._fps_dpr
-            vw, vh = self._fps_vw, self._fps_vh
+            # vw = self._fps_vw
+            # vh = self._fps_vh
             tw, th = self._fps_tw, self._fps_th
 
             dest_x = int(x * dpr)
@@ -682,6 +675,7 @@ class BrowserWindow(QMainWindow):
             self.settings_manager.log_system_event("main_window", "Status", message)
 
     def view_logs(self):
+        log_path = self.settings_manager.get_log_file_path()
         if log_path:
             try:
                 import subprocess
@@ -806,29 +800,26 @@ class BrowserWindow(QMainWindow):
 
     def back(self, checked: bool = False):
         w = self._get_current_webview()
-        if w: w.back()
+        if w: 
+            w.back()
 
     def forward(self, checked: bool = False):
         w = self._get_current_webview()
-        if w: w.forward()
+        if w: 
+            w.forward()
 
     def reload(self, checked: bool = False):
         w = self._get_current_webview()
-        if w: w.reload()
+        if w: 
+            w.reload()
 
     def stop(self, checked: bool = False):
         w = self._get_current_webview()
-        if w: w.stop()
-        def home(self):
-            self.navigate_current(self.settings_manager.get("home_url", "about:blank"))
+        if w: 
+            w.stop()
 
-    def navigate_current(self, url):
-        tab = self._get_current_tab()
-        if not tab:
-            return
-        qurl = self._normalize_to_url(url)
-        self._load_in_tab(tab, qurl)
-
+    def home(self):
+        self.navigate_current(self.settings_manager.get("home_url", "about:blank"))
 
     # --- Public API for menu / shortcuts ----------------------------------------
     def create_new_tab(self, arg=None, *, switch: bool = True):
@@ -882,6 +873,15 @@ class BrowserWindow(QMainWindow):
         except Exception:
             pass
 
+    # def navigate_current(self, url):
+    #     tab = self._get_current_tab()
+    #     if not tab:
+    #         return
+    #     qurl = self._normalize_to_url(url)
+    #     self._load_in_tab(tab, qurl)
+
+
+
     def _load_in_tab(self, tab, qurl):
         try:
             if hasattr(self, "urlbar"):
@@ -916,8 +916,10 @@ class BrowserWindow(QMainWindow):
             if retries > 0:
                 QTimer.singleShot(50, lambda t=tab, c=container, r=retries-1: self._wire_tab_signals(t, c, r))
             else:
-                try: self.settings_manager.log_error("main_window", "Timed out waiting for web view in BrowserTab")
-                except Exception: pass
+                try: 
+                    self.settings_manager.log_error("main_window", "Timed out waiting for web view in BrowserTab")
+                except Exception: 
+                    pass
             return
         # connect once we have the view
         v.titleChanged.connect(lambda t, c=container: self._on_tab_title_changed(c, t))
@@ -1037,8 +1039,10 @@ class BrowserWindow(QMainWindow):
             if retries > 0:
                 QTimer.singleShot(50, lambda t=tab, u=qurl, r=retries-1: self._load_in_tab(t, u, r))
             else:
-                try: self.settings_manager.log_error("main_window", f"Failed to load {qurl.toString()}: web view not ready")
-                except Exception: pass
+                try: 
+                    self.settings_manager.log_error("main_window", f"Failed to load {qurl.toString()}: web view not ready")
+                except Exception: 
+                    pass
             return
         v.setUrl(qurl)
 
@@ -1350,7 +1354,6 @@ class BrowserWindow(QMainWindow):
             self.scripts_dir.mkdir(parents=True, exist_ok=True)
             folder = str(self.scripts_dir.resolve())
 
-            import platform, subprocess
             system = platform.system()
             if system == "Windows":
                 subprocess.run(["explorer", folder])
