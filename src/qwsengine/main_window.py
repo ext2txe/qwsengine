@@ -318,6 +318,11 @@ class BrowserWindow(QMainWindow):
         act_about.triggered.connect(self.show_about_dialog)
         help_menu.addAction(act_about)
 
+        help_menu.addSeparator()
+        view_settings_json_action = QAction("View settings.json", self)
+        view_settings_json_action.triggered.connect(self.view_settings_json)
+        help_menu.addAction(view_settings_json_action)
+
         return menu_bar
 
     def clear_browser_data(self):
@@ -420,6 +425,56 @@ class BrowserWindow(QMainWindow):
         # If we get here, our tab is malformed
         raise RuntimeError("Could not find QWebEngineView in BrowserTab")
 
+    def view_settings_json(self):
+        """Open the settings.json file in the system's default editor."""
+        try:
+            settings_path = self.settings_manager.config_dir / "settings.json"
+            
+            # Ensure the file exists
+            if not settings_path.exists():
+                QMessageBox.information(
+                    self, 
+                    "Settings File Not Found",
+                    f"The settings.json file does not exist yet at:\n{settings_path}\n\n"
+                    "It will be created when you save settings."
+                )
+                self.settings_manager.log_system_event("main_window", "Settings file not found", str(settings_path))
+                return
+            
+            import subprocess
+            import platform
+            
+            system = platform.system()
+            settings_file = str(settings_path.resolve())
+            
+            if system == "Windows":
+                # Use notepad as default editor on Windows
+                subprocess.run(["notepad.exe", settings_file])
+            elif system == "Darwin":  # macOS
+                # Use open command which respects default app associations
+                subprocess.run(["open", "-t", settings_file])  # -t forces text editor
+            else:  # Linux / BSD
+                # Try common editors, fallback to xdg-open
+                editors = ["gedit", "kate", "nano", "vim", "xdg-open"]
+                for editor in editors:
+                    try:
+                        subprocess.run([editor, settings_file])
+                        break
+                    except FileNotFoundError:
+                        continue
+            
+            self.show_status(f"Opened settings.json → {settings_file}", level="INFO")
+            self.settings_manager.log_system_event("main_window", "Settings file opened", settings_file)
+            
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "Error Opening Settings",
+                f"Failed to open settings.json:\n{str(e)}\n\n"
+                f"File location:\n{settings_path}"
+            )
+            self.show_status(f"Failed to open settings.json: {e}", level="ERROR")
+            self.settings_manager.log_error("main_window", f"Open settings.json failed: {e}")
 
     # =========================================================================
     # full page screenshot

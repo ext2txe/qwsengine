@@ -18,18 +18,18 @@ RESOURCE_PREFIX = ":/qws"
 try:
     from . import __version__ as APP_VERSION  # defined in qwsengine/__init__.py
 except Exception:
-    APP_VERSION = "0.4.2-dev"
+    APP_VERSION = "0.4.3-dev"
 
 # ---- Standard locations (cross-platform) ----------------------------------
 def app_dir(kind: QStandardPaths.StandardLocation) -> Path:
     """
     Returns a writable per-user directory for the app, e.g.
-    - Windows: %APPDATA%/YourOrg/QWSEngine
-    - macOS:   ~/Library/Application Support/YourOrg/QWSEngine
-    - Linux:   ~/.local/share/YourOrg/QWSEngine (or ~/.config for AppConfigLocation)
+    - Windows: %APPDATA%/QWSEngine/codaland.com
+    - macOS:   ~/Library/Application Support/QWSEngine/YourOrg
+    - Linux:   ~/.local/share/QWSEngine/YourOrg (or ~/.config for AppConfigLocation)
     """
     base = Path(QStandardPaths.writableLocation(kind))
-    path = base / APP_ORG / APP_NAME
+    path = base / APP_NAME / APP_ORG
     path.mkdir(parents=True, exist_ok=True)
     return path
 

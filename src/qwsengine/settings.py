@@ -243,29 +243,29 @@ class SettingsManager:
             # 1) write tmp
             with tmp_path.open("w", encoding="utf-8") as f:
                 json.dump(self.settings, f, indent=2)
-
-            # 2) fsync to reduce Windows lock weirdness
-            try:
-                f.flush()  # type: ignore[name-defined]
-                os_fno = f.fileno()  # type: ignore[name-defined]
-                import os
-                os.fsync(os_fno)
-            except Exception:
-                pass  # best effort
+                # 2) fsync to reduce Windows lock weirdness
+                try:
+                    f.flush()
+                    os_fno = f.fileno()
+                    os.fsync(os_fno)
+                except Exception:
+                    pass  # best effort
 
             # 3) replace
             tmp_path.replace(SETTINGS_PATH)
 
-            # 4) verify read-back
-            # try:
-            #     # loaded = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
-            #     # minimal check: a field we just set exists (else skip)
+            # 4) verify read-back (optional but recommended)
+            try:
+                loaded = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+                # minimal check: ensure it's a dict
+                if not isinstance(loaded, dict):
+                    self.log_error("SettingsManager", "Settings saved but verification failed: invalid JSON structure")
+                    return False
+            except Exception as e:
+                self.log_error("SettingsManager", f"Settings saved but verify failed: {e}")
+                return False
 
-            # except Exception as e:
-            #     self.log_error("SettingsManager", f"Settings saved but verify failed: {e}")
-            #     return False
-
-            # return True
+            return True
 
         except Exception as e:
             self.log_error("SettingsManager", f"Failed to save settings to file: {e}")
