@@ -8,7 +8,7 @@ import subprocess
 from datetime import datetime
 from typing import Optional, Union
 
-from PySide6.QtCore import QUrl, QRect, QByteArray, QSettings, QTimer, QStandardPaths
+from PySide6.QtCore import QUrl, QRect, QByteArray, QSettings, QTimer
 from PySide6.QtGui import QAction, QPainter, QImage, QKeySequence
 from PySide6.QtWidgets import (
     QMainWindow,
@@ -26,9 +26,8 @@ from PySide6.QtWidgets import (
     QToolButton
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from qwsengine.config_manager import app_dir
 from PySide6.QtWebEngineCore import QWebEngineProfile
-from .app_info import APP_VERSION
+from .app_info import APP_VERSION, LOG_DIR
 
 # Import your tab widget (your traceback shows browser_tab.py)
 from .browser_tab import BrowserTab
@@ -69,6 +68,8 @@ class BrowserWindow(QMainWindow):
         policy = getattr(pcp, "ForcePersistentCookies", pcp.AllowPersistentCookies)
         QWebEngineProfile.defaultProfile().setPersistentCookiesPolicy(policy)
 
+        self.log_info(f"QWSEngine browser v{APP_VERSION} starts")
+
         self.setWindowTitle(f"Qt Browser v{APP_VERSION}")
         self.resize(1200, 800)
 
@@ -83,8 +84,7 @@ class BrowserWindow(QMainWindow):
 
         # Populate the combo at startup
         self._load_script_list()
-
-        
+     
     def configure_profile(profile: QWebEngineProfile):
         cache = app_dir(QStandardPaths.CacheLocation) / "web"
         storage = app_dir(QStandardPaths.AppDataLocation) / "web"
@@ -337,6 +337,9 @@ class BrowserWindow(QMainWindow):
             else:
                 QMessageBox.warning(self, "Clear Failed", "Failed to clear browser data.")
 
+    def log_info(self, message):
+        self.settings_manager.log_info("main_window", f"{message}")
+
     def save_current_tab_html(self):
         try:
             current = self.tabs.currentWidget()
@@ -428,7 +431,7 @@ class BrowserWindow(QMainWindow):
     def view_settings_json(self):
         """Open the settings.json file in the system's default editor."""
         try:
-            settings_path = self.settings_manager.config_dir / "settings.json"
+            settings_path = self.settings_manager.settings_path  # / "settings.json"
             
             # Ensure the file exists
             if not settings_path.exists():
@@ -730,24 +733,37 @@ class BrowserWindow(QMainWindow):
             self.settings_manager.log_system_event("main_window", "Status", message)
 
     def view_logs(self):
-        log_path = self.settings_manager.get_log_file_path()
-        if log_path:
+        """Open the logs directory in the file explorer."""
+        try:
+            # Get the log directory directly from settings manager
+            log_dir = LOG_DIR   # self.settings_manager.get_log_dir()
+            
+            if not log_dir.exists():
+                log_dir.mkdir(parents=True, exist_ok=True)
+            
+            import subprocess
+            import platform
+            
+            log_dir_str = str(log_dir.resolve())
+            
+            system = platform.system()
+            if system == "Windows":
+                subprocess.run(["explorer", log_dir_str])
+            elif system == "Darwin":
+                subprocess.run(["open", log_dir_str])
+            else:
+                subprocess.run(["xdg-open", log_dir_str])
+            
+            self.settings_manager.log_system_event("main_window", "Log directory opened", log_dir_str)
+            
+        except Exception as e:
+            self.settings_manager.log_error("main_window", f"Failed to open log directory: {str(e)}")
+            # Fallback: show the path in a message box
             try:
-                import subprocess
-                import platform
-                log_dir = os.path.dirname(log_path)
-                if platform.system() == "Windows":
-                    subprocess.run(["explorer", log_dir])
-                elif platform.system() == "Darwin":
-                    subprocess.run(["open", log_dir])
-                else:
-                    subprocess.run(["xdg-open", log_dir])
-                self.settings_manager.log_system_event("main_window", "Log directory opened")
-            except Exception as e:
-                self.settings_manager.log_error("main_window", f"Failed to open log directory: {str(e)}")
-                QMessageBox.information(self, "Log Location", f"Log file location:\n{log_path}")
-        else:
-            QMessageBox.information(self, "Logging Disabled", "Logging is currently disabled.")
+                log_dir = self.settings_manager.get_log_dir()
+                QMessageBox.information(self, "Log Location", f"Log directory:\n{log_dir}")
+            except Exception:
+                QMessageBox.warning(self, "Error", f"Failed to open logs: {str(e)}")
 
     def _get_settings_manager(self):
         """

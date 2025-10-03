@@ -1,24 +1,28 @@
 import sys
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QIcon
+from qwsengine.app_info import APP_ID
 from qwsengine.main_window import BrowserWindow
 
 def main():
     app = QApplication(sys.argv)
-
-    # Optional but recommended on Windows: make sure taskbar uses *your* icon/group
+    
+    # Configure app identity from single source of truth
+    
+    # Optional: Windows taskbar grouping
     try:
         import ctypes
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("qwsengine.app")
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
     except Exception:
         pass
+    
+    # Set icon
     app.setWindowIcon(QIcon(r"C:\Users\joe\source\repos\qwsengine\resources\icons\logo.ico"))
-
-    app.setApplicationName("QWSEngine")
-    app.setApplicationVersion("1.1.0")
+    
     window = BrowserWindow()
     window.show()
     window.settings_manager.log_system_event("App", "Application fully loaded and visible")
+    
     try:
         sys.exit(app.exec())
     except Exception as e:
@@ -28,3 +32,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+

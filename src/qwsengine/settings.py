@@ -10,7 +10,7 @@ from PySide6.QtCore import QByteArray, QRect
 from PySide6.QtWebEngineCore import QWebEngineProfile
 
 # Single source of truth for app identity & paths
-from .app_info import app_dir, SETTINGS_PATH, CACHE_DIR, DATA_DIR
+from qwsengine.app_info import app_dir, SETTINGS_PATH, CACHE_DIR, DATA_DIR, LOG_DIR
 
 # Optional imports (don’t crash if not present)
 try:
@@ -37,10 +37,9 @@ class SettingsManager:
     def __init__(self) -> None:
         # ----- directories (used by logger & others) -----------------------
         self.config_dir: Path = app_dir(QStandardPaths.AppConfigLocation)
+        self.settings_path = SETTINGS_PATH
         self.cache_dir: Path  = CACHE_DIR
         self.data_dir: Path   = DATA_DIR
-        self.logs_dir: Path = self.config_dir / "logs"
-        self.logs_dir.mkdir(parents=True, exist_ok=True)
 
         # ----- Defaults (EXACTLY as provided) ------------------------------
         self.default_settings: Dict[str, Any] = {
@@ -208,7 +207,7 @@ class SettingsManager:
                         pass
 
         # Fallback: conventional single-file log
-        fallback = self.logs_dir / "qwsengine.log"
+        fallback = LOG_DIR / "qwsengine.log"
         if ensure_exists:
             fallback.parent.mkdir(parents=True, exist_ok=True)
             fallback.touch(exist_ok=True)

@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime
 from pathlib import Path
+from PySide6.QtCore import QStandardPaths
 
 class CustomFileHandler(logging.Handler):
     """Custom logging handler that opens and closes file for each write"""
@@ -21,8 +22,11 @@ class CustomFileHandler(logging.Handler):
 
 
 class LogManager:
-    def __init__(self, config_dir: Path):
-        self.config_dir = Path(config_dir)
+    def __init__(self):
+        """Initialize LogManager using standard application paths."""
+        from .app_info import app_dir
+        
+        self.config_dir = app_dir(QStandardPaths.AppConfigLocation)
         self.log_dir = self.config_dir / "logs"
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
