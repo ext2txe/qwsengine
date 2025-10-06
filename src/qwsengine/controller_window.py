@@ -15,6 +15,7 @@ from PySide6.QtCore import QTimer, Qt, QUrl
 from PySide6.QtGui import QPixmap
 
 from .app_info import APP_VERSION
+from .controller_script import ControllerScript, ScriptValidator
 
 
 class BrowserControllerWindow(QMainWindow):
@@ -34,6 +35,14 @@ class BrowserControllerWindow(QMainWindow):
         
         self.setWindowTitle(f"Qt Browser (controller) v{APP_VERSION}")
         self.resize(450, 900)
+        
+        # Initialize scripting engine
+        self.script_engine = ControllerScript(self)
+        self.script_engine.command_executed.connect(self.on_script_command_executed)
+        self.script_engine.script_error.connect(self.on_script_error)
+        self.script_engine.script_started.connect(self.on_script_started)
+        self.script_engine.script_finished.connect(self.on_script_finished)
+        self.script_engine.progress_update.connect(self.on_script_progress)
         
         self.init_ui()
         
@@ -87,35 +96,58 @@ class BrowserControllerWindow(QMainWindow):
         self.status_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.status_label)
         
-        # Navigation section
+        # Create tab widget
+        from PySide6.QtWidgets import QTabWidget
+        self.tab_widget = QTabWidget()
+        layout.addWidget(self.tab_widget)
+        
+        # Tab 1: Controls
+        controls_tab = QWidget()
+        controls_layout = QVBoxLayout(controls_tab)
+        controls_layout.setSpacing(10)
+        
         nav_group = self.create_navigation_section()
-        layout.addWidget(nav_group)
+        controls_layout.addWidget(nav_group)
         
-        # Quick actions section
         actions_group = self.create_quick_actions_section()
-        layout.addWidget(actions_group)
+        controls_layout.addWidget(actions_group)
         
-        # User Agent section
-        ua_group = self.create_user_agent_section()
-        layout.addWidget(ua_group)
-        
-        # Proxy section
-        proxy_group = self.create_proxy_section()
-        layout.addWidget(proxy_group)
-        
-        # Auto-reload section
         reload_group = self.create_auto_reload_section()
-        layout.addWidget(reload_group)
+        controls_layout.addWidget(reload_group)
         
-        # Screenshot section
         screenshot_group = self.create_screenshot_section()
-        layout.addWidget(screenshot_group)
+        controls_layout.addWidget(screenshot_group)
         
-        # Command log
         log_group = self.create_log_section()
-        layout.addWidget(log_group)
+        controls_layout.addWidget(log_group)
         
-        layout.addStretch()
+        controls_layout.addStretch()
+        self.tab_widget.addTab(controls_tab, "Controls")
+        
+        # Tab 2: Scripting
+        script_tab = QWidget()
+        script_layout = QVBoxLayout(script_tab)
+        script_layout.setSpacing(10)
+        
+        script_group = self.create_scripting_section()
+        script_layout.addWidget(script_group)
+        
+        script_layout.addStretch()
+        self.tab_widget.addTab(script_tab, "Scripting")
+        
+        # Tab 3: Settings
+        settings_tab = QWidget()
+        settings_layout = QVBoxLayout(settings_tab)
+        settings_layout.setSpacing(10)
+        
+        ua_group = self.create_user_agent_section()
+        settings_layout.addWidget(ua_group)
+        
+        proxy_group = self.create_proxy_section()
+        settings_layout.addWidget(proxy_group)
+        
+        settings_layout.addStretch()
+        self.tab_widget.addTab(settings_tab, "Settings")
         
     def create_navigation_section(self):
         """Create navigation controls"""
@@ -299,6 +331,98 @@ class BrowserControllerWindow(QMainWindow):
         self.auto_reload_btn.clicked.connect(self.on_toggle_auto_reload)
         self.auto_reload_btn.setStyleSheet("QPushButton { background-color: #2196f3; color: white; padding: 10px; font-weight: bold; }")
         layout.addWidget(self.auto_reload_btn)
+        
+        # Screenshot on reload checkbox
+        self.auto_reload_screenshot_cb = QCheckBox("Take screenshot after each reload")
+        self.auto_reload_screenshot_cb.stateChanged.connect(self.on_auto_reload_screenshot_changed)
+        layout.addWidget(self.auto_reload_screenshot_cb)
+        
+        group.setLayout(layout)
+        return group
+        
+    def create_scripting_section(self):
+        """Create scripting controls"""
+        group = QGroupBox("Script Automation")
+        layout = QVBoxLayout()
+        
+        # Script editor
+        self.script_editor = QTextEdit()
+        self.script_editor.setPlaceholderText(
+            "Enter commands (one per line):\n\n"
+            "navigate https://example.com\n"
+            "wait 2000\n"
+            "reload\n"
+            "wait 1000\n"
+            "screenshot\n"
+            "status Starting navigation tests\n"
+            "back\n"
+            "forward\n"
+            "stop\n"
+            "save_html\n"
+            "screenshot_full\n"
+            "set_user_agent Mozilla/5.0...\n"
+            "enable_proxy\n"
+            "disable_proxy\n"
+            "auto_reload start 30\n"
+            "auto_reload stop\n"
+            "auto_reload_screenshot on\n"
+            "auto_reload_screenshot off\n"
+            "\n# Use # for comments\n"
+            "# wait times are in milliseconds"
+        )
+        self.script_editor.setMaximumHeight(200)
+        layout.addWidget(self.script_editor)
+        
+        # Progress bar
+        progress_layout = QHBoxLayout()
+        progress_layout.addWidget(QLabel("Progress:"))
+        self.script_progress_label = QLabel("0 / 0")
+        progress_layout.addWidget(self.script_progress_label)
+        progress_layout.addStretch()
+        layout.addLayout(progress_layout)
+        
+        # Control buttons
+        button_layout = QHBoxLayout()
+        
+        validate_btn = QPushButton("Validate Script")
+        validate_btn.clicked.connect(self.on_validate_script)
+        validate_btn.setStyleSheet("QPushButton { background-color: #607d8b; color: white; padding: 8px; }")
+        button_layout.addWidget(validate_btn)
+        
+        self.script_start_btn = QPushButton("▶ Start Script")
+        self.script_start_btn.clicked.connect(self.on_start_script)
+        self.script_start_btn.setStyleSheet("QPushButton { background-color: #4caf50; color: white; padding: 8px; font-weight: bold; }")
+        button_layout.addWidget(self.script_start_btn)
+        
+        self.script_pause_btn = QPushButton("⏸ Pause")
+        self.script_pause_btn.clicked.connect(self.on_pause_script)
+        self.script_pause_btn.setStyleSheet("QPushButton { background-color: #ff9800; color: white; padding: 8px; }")
+        self.script_pause_btn.setEnabled(False)
+        button_layout.addWidget(self.script_pause_btn)
+        
+        self.script_stop_btn = QPushButton("⏹ Stop")
+        self.script_stop_btn.clicked.connect(self.on_stop_script)
+        self.script_stop_btn.setStyleSheet("QPushButton { background-color: #f44336; color: white; padding: 8px; }")
+        self.script_stop_btn.setEnabled(False)
+        button_layout.addWidget(self.script_stop_btn)
+        
+        layout.addLayout(button_layout)
+        
+        # Save/Load buttons
+        file_layout = QHBoxLayout()
+        
+        save_script_btn = QPushButton("💾 Save Script")
+        save_script_btn.clicked.connect(self.on_save_script)
+        file_layout.addWidget(save_script_btn)
+        
+        load_script_btn = QPushButton("📂 Load Script")
+        load_script_btn.clicked.connect(self.on_load_script)
+        file_layout.addWidget(load_script_btn)
+        
+        layout.addLayout(file_layout)
+        
+        group.setLayout(layout)
+        return group
         
         group.setLayout(layout)
         return group
@@ -588,6 +712,167 @@ class BrowserControllerWindow(QMainWindow):
         """Handle auto-reload timer timeout"""
         self.log_command("Auto-reload triggered")
         self.on_reload()
+        
+        # Check if screenshot should be taken
+        if self.auto_reload_screenshot_cb.isChecked():
+            # Wait a bit for page to load before screenshot
+            QTimer.singleShot(2000, self.on_screenshot)
+    
+    def on_auto_reload_screenshot_changed(self, state):
+        """Handle auto-reload screenshot checkbox"""
+        enabled = state == 2  # Qt.Checked
+        if self.settings_manager:
+            self.settings_manager.set("auto_reload_screenshot", enabled)
+        self.log_command(f"Auto-reload screenshot: {'enabled' if enabled else 'disabled'}")
+        
+    # =========================================================================
+    # Script handling methods
+    # =========================================================================
+    
+    def on_validate_script(self):
+        """Validate script syntax"""
+        script_text = self.script_editor.toPlainText()
+        if not script_text.strip():
+            self.update_status("No script to validate")
+            return
+            
+        is_valid, errors = ScriptValidator.validate(script_text)
+        
+        if is_valid:
+            line_count = self.script_engine.load_script(script_text)
+            self.update_status(f"✓ Script valid ({line_count} commands)")
+            self.log_command(f"Script validated: {line_count} commands")
+        else:
+            error_msg = "Script validation errors:\n" + "\n".join(errors)
+            self.update_status("✗ Script has errors")
+            self.log_command("Script validation failed")
+            
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Script Validation", error_msg)
+            
+    def on_start_script(self):
+        """Start script execution"""
+        script_text = self.script_editor.toPlainText()
+        if not script_text.strip():
+            self.update_status("No script to execute")
+            return
+            
+        # Validate first
+        is_valid, errors = ScriptValidator.validate(script_text)
+        if not is_valid:
+            error_msg = "Script has errors:\n" + "\n".join(errors[:5])
+            if len(errors) > 5:
+                error_msg += f"\n... and {len(errors) - 5} more errors"
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Script Errors", error_msg)
+            return
+            
+        # Load and start
+        line_count = self.script_engine.load_script(script_text)
+        self.update_status(f"Starting script ({line_count} commands)...")
+        self.script_engine.start()
+        
+    def on_pause_script(self):
+        """Pause/resume script execution"""
+        if self.script_engine.is_paused:
+            self.script_engine.resume()
+        else:
+            self.script_engine.pause()
+            
+    def on_stop_script(self):
+        """Stop script execution"""
+        self.script_engine.stop()
+        
+    def on_script_started(self):
+        """Handle script started"""
+        self.script_editor.setEnabled(False)
+        self.script_start_btn.setEnabled(False)
+        self.script_pause_btn.setEnabled(True)
+        self.script_stop_btn.setEnabled(True)
+        self.update_status("Script running...")
+        
+    def on_script_finished(self):
+        """Handle script finished"""
+        self.script_editor.setEnabled(True)
+        self.script_start_btn.setEnabled(True)
+        self.script_pause_btn.setEnabled(False)
+        self.script_stop_btn.setEnabled(False)
+        self.script_pause_btn.setText("⏸ Pause")
+        self.update_status("Script finished")
+        self.script_progress_label.setText("Complete")
+        
+    def on_script_command_executed(self, command):
+        """Handle script command executed"""
+        # Already logged by script engine
+        pass
+        
+    def on_script_error(self, error):
+        """Handle script error"""
+        self.update_status(f"Script error: {error}")
+        from PySide6.QtWidgets import QMessageBox
+        QMessageBox.warning(self, "Script Error", error)
+        
+    def on_script_progress(self, current, total):
+        """Update script progress"""
+        self.script_progress_label.setText(f"{current} / {total}")
+        if self.script_engine.is_paused:
+            self.script_pause_btn.setText("▶ Resume")
+        else:
+            self.script_pause_btn.setText("⏸ Pause")
+            
+    def on_save_script(self):
+        """Save script to file"""
+        from PySide6.QtWidgets import QFileDialog
+        
+        if not self.settings_manager:
+            return
+            
+        scripts_dir = self.settings_manager.config_dir / "scripts"
+        scripts_dir.mkdir(parents=True, exist_ok=True)
+        
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Script",
+            str(scripts_dir / "script.txt"),
+            "Script Files (*.txt);;All Files (*.*)"
+        )
+        
+        if filename:
+            try:
+                script_text = self.script_editor.toPlainText()
+                with open(filename, 'w', encoding='utf-8') as f:
+                    f.write(script_text)
+                self.update_status(f"Script saved: {filename}")
+                self.log_command(f"Script saved to: {filename}")
+            except Exception as e:
+                self.update_status(f"Failed to save script: {e}")
+                
+    def on_load_script(self):
+        """Load script from file"""
+        from PySide6.QtWidgets import QFileDialog
+        
+        if not self.settings_manager:
+            return
+            
+        scripts_dir = self.settings_manager.config_dir / "scripts"
+        scripts_dir.mkdir(parents=True, exist_ok=True)
+        
+        filename, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load Script",
+            str(scripts_dir),
+            "Script Files (*.txt);;All Files (*.*)"
+        )
+        
+        if filename:
+            try:
+                with open(filename, 'r', encoding='utf-8') as f:
+                    script_text = f.read()
+                self.script_editor.setPlainText(script_text)
+                self.update_status(f"Script loaded: {filename}")
+                self.log_command(f"Script loaded from: {filename}")
+            except Exception as e:
+                self.update_status(f"Failed to load script: {e}")
         
     def on_screenshot(self):
         """Handle screenshot button click"""
