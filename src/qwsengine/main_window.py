@@ -1047,8 +1047,14 @@ class BrowserWindow(QMainWindow):
 
     # --- Public tab-creation API (menu actions / external callers) ----------
     def _new_tab(self, url: QUrl | str | None = None, switch: bool = True, profile: QWebEngineProfile | None = None, background: bool = False):
-        prof = profile or QWebEngineProfile.defaultProfile()
-        
+        #prof = profile or QWebEngineProfile.defaultProfile()
+        prof = (
+            profile
+            or getattr(self.settings_manager, "web_profile", None)
+            or getattr(self.settings_manager, "profile", None)
+            or QWebEngineProfile.defaultProfile()
+        )
+
         self._apply_user_agent_to_profile(prof)
         
         tab = BrowserTab(

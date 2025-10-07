@@ -11,6 +11,7 @@ from PySide6.QtWebEngineCore import QWebEngineProfile
 
 # Single source of truth for app identity & paths
 from qwsengine.app_info import app_dir, SETTINGS_PATH, CACHE_DIR, DATA_DIR, LOG_DIR
+from .request_interceptor import HeaderInterceptor  # <-- correct name
 
 # Optional imports (don’t crash if not present)
 try:
@@ -611,45 +612,63 @@ class SettingsManager:
 
         return profile
 
+    # settings.py
     def _install_request_interceptor(self, profile: QWebEngineProfile) -> None:
         """
-        Try existing RequestInterceptor implementations:
-        1) RequestInterceptor(self)  -> full SettingsManager access (preferred)
-        2) RequestInterceptor(headers_dict) -> static headers only
+        Install our HeaderInterceptor so Accept-Language / DNT / custom headers are sent.
         """
         try:
-            from .request_interceptor import RequestInterceptor  # your implemented interceptor
+            # Your class is named HeaderInterceptor, not RequestInterceptor
+            from .request_interceptor import HeaderInterceptor  # <- correct class
         except Exception:
             return
 
-        # Build a static header baseline (used if ctor wants dict):
-        baseline_headers: Dict[str, str] = {}
-        # Accept-Language (if not empty)
-        if self.settings.get("accept_language"):
-            baseline_headers["Accept-Language"] = self.settings["accept_language"]
-        # DNT
-        if self.settings.get("send_dnt", False):
-            baseline_headers["DNT"] = "1"
-        # Global headers
-        for k, v in (self.settings.get("headers_global") or {}).items():
-            baseline_headers[str(k)] = str(v)
-
-        # Optional: spoof a minimal set of UA Client Hints (many servers ignore if UA not matching)
-        if self.settings.get("spoof_chrome_client_hints", False):
-            # Very basic, static hints — your interceptor can refine per-platform
-            baseline_headers.setdefault("Sec-CH-UA", '"Chromium";v="120", "Not.A/Brand";v="24"')
-            baseline_headers.setdefault("Sec-CH-UA-Platform", '"Windows"')
-            baseline_headers.setdefault("Sec-CH-UA-Mobile", "?0")
-
-        # Try constructor with SettingsManager first (most powerful)
-        interceptor = None
+        # Create and attach
         try:
-            interceptor = RequestInterceptor(self)  # type: ignore[arg-type]
+            interceptor = HeaderInterceptor(self)  # pass SettingsManager
+            profile.setUrlRequestInterceptor(interceptor)
         except Exception:
-            try:
-                interceptor = RequestInterceptor(baseline_headers)  # type: ignore[arg-type]
-            except Exception:
-                interceptor = None
+            pass
+
+    # def _install_request_interceptor(self, profile: QWebEngineProfile) -> None:
+    #     """
+    #     Try existing RequestInterceptor implementations:
+    #     1) RequestInterceptor(self)  -> full SettingsManager access (preferred)
+    #     2) RequestInterceptor(headers_dict) -> static headers only
+    #     """
+    #     try:
+    #         from .request_interceptor import RequestInterceptor  # your implemented interceptor
+    #     except Exception:
+    #         return
+
+    #     # Build a static header baseline (used if ctor wants dict):
+    #     baseline_headers: Dict[str, str] = {}
+    #     # Accept-Language (if not empty)
+    #     if self.settings.get("accept_language"):
+    #         baseline_headers["Accept-Language"] = self.settings["accept_language"]
+    #     # DNT
+    #     if self.settings.get("send_dnt", False):
+    #         baseline_headers["DNT"] = "1"
+    #     # Global headers
+    #     for k, v in (self.settings.get("headers_global") or {}).items():
+    #         baseline_headers[str(k)] = str(v)
+
+    #     # Optional: spoof a minimal set of UA Client Hints (many servers ignore if UA not matching)
+    #     if self.settings.get("spoof_chrome_client_hints", False):
+    #         # Very basic, static hints — your interceptor can refine per-platform
+    #         baseline_headers.setdefault("Sec-CH-UA", '"Chromium";v="120", "Not.A/Brand";v="24"')
+    #         baseline_headers.setdefault("Sec-CH-UA-Platform", '"Windows"')
+    #         baseline_headers.setdefault("Sec-CH-UA-Mobile", "?0")
+
+    #     # Try constructor with SettingsManager first (most powerful)
+    #     interceptor = None
+    #     try:
+    #         interceptor = RequestInterceptor(self)  # type: ignore[arg-type]
+    #     except Exception:
+    #         try:
+    #             interceptor = RequestInterceptor(baseline_headers)  # type: ignore[arg-type]
+    #         except Exception:
+    #             interceptor = None
 
         if interceptor is not None:
             try:
