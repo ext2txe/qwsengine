@@ -37,7 +37,7 @@ class SettingsManager:
 
     def __init__(self) -> None:
         # ----- directories (used by logger & others) -----------------------
-        self.config_dir: Path = app_dir(QStandardPaths.AppConfigLocation)
+        self.config_dir: Path = DATA_DIR # app_dir(QStandardPaths.AppConfigLocation)
         self.settings_path = SETTINGS_PATH
         self.cache_dir: Path  = CACHE_DIR
         self.data_dir: Path   = DATA_DIR
