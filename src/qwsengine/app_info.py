@@ -18,7 +18,7 @@ RESOURCE_PREFIX = ":/qws"
 try:
     from . import __version__ as APP_VERSION  # defined in qwsengine/__init__.py
 except Exception:
-    APP_VERSION = "0.4.7-dev"
+    APP_VERSION = "0.4.9-dev"
 
 # ---- Standard locations (cross-platform) ----------------------------------
 def app_dir(kind: QStandardPaths.StandardLocation) -> Path:
