@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 # Qt
-from PySide6.QtCore import QTimer, Qt, QSettings, QByteArray, QCoreApplication
+from PySide6.QtCore import QTimer, Qt, QSettings, QByteArray, QCoreApplication, QEvent
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QGroupBox, QTabWidget,
     QSpinBox, QCheckBox, QStatusBar, QTextEdit   # ← add QStatusBar
 )
+
 
 # Project
 try:
@@ -35,7 +36,17 @@ class BrowserControllerWindow(QMainWindow):
         # Initialize scripting engine...
         # ... (unchanged) ...
 
+        # Ensure we actually get destroyed when the user closes the window
+        self.setAttribute(Qt.WA_DeleteOnClose, True)
+
+        # Some window flags cause a Hide instead of Close — watch both
+        self.installEventFilter(self)
+
+        # Fallback: if we're destroyed via other means, still close main
+        self.destroyed.connect(lambda *_: self._safe_close_main())
+
         self.init_ui()
+
 
         # ⟵ restore controller window geometry/state
         self._restore_window_state()
@@ -47,7 +58,8 @@ class BrowserControllerWindow(QMainWindow):
         else:
             self.update_status("Warning: No settings manager")
 
-    # ---------- NEW: save/restore controller window geometry ----------
+
+
     def _restore_window_state(self):
         try:
             qs = QSettings("qwsengine", "QtBrowserController")
@@ -68,24 +80,111 @@ class BrowserControllerWindow(QMainWindow):
         except Exception:
             pass
 
-    def closeEvent(self, event):
-        # persist controller geometry/state
+
+    def eventFilter(self, obj, ev):
+        if obj is self:
+            et = ev.type()
+            if et == QEvent.Close:
+                # Normal close path
+                try:
+                    self._persist_window_state()
+                except Exception:
+                    pass
+                self._safe_close_main()
+            elif et == QEvent.Hide and not self.isVisible():
+                # Tool-style windows often emit Hide instead of Close
+                try:
+                    self._persist_window_state()
+                except Exception:
+                    pass
+                self._safe_close_main()
+        return super().eventFilter(obj, ev)
+
+
+    def _safe_close_main(self):
+        """Best-effort: close the main BrowserWindow if it exists."""
         try:
-            from PySide6.QtCore import QSettings
-            qs = QSettings("qwsengine", "QtBrowserController")
-            qs.setValue("controller/geometry", self.saveGeometry())
-            qs.setValue("controller/state", self.saveState())
+            bw = getattr(self, "browser_window", None)
+            if not bw:
+                # Fallback: find it among top-level widgets
+                from PySide6.QtWidgets import QApplication
+                for w in QApplication.topLevelWidgets():
+                    if w.__class__.__name__ == "BrowserWindow":
+                        bw = w
+                        break
+            if bw and bw.isVisible():
+                # Close on next tick to avoid re-entrancy
+                QTimer.singleShot(0, bw.close)
         except Exception:
             pass
 
-        # also close the main browser window
+    # def _safe_close_main(self):
+    #     """Best-effort: close the main browser window if it exists."""
+    #     try:
+    #         bw = getattr(self, "browser_window", None)
+    #         if bw and bw.isVisible():
+    #             bw.close()
+    #     except Exception:
+    #         pass
+
+    # def closeEvent(self, event: QCloseEvent):
+    #     # Still implement closeEvent for platforms that do call it
+    #     try:
+    #         self._persist_window_state()
+    #     except Exception:
+    #         pass
+    #     self._safe_close_main()
+    #     super().closeEvent(event)
+
+    def closeEvent(self, event):
+        """Persist controller state and close the main browser window too."""
         try:
-            if getattr(self, "browser_window", None):
-                self.browser_window.close()
+            if hasattr(self, "_persist_window_state"):
+                self._persist_window_state()
+        except Exception:
+            pass
+
+        # Stop timers safely
+        try:
+            if hasattr(self, "auto_reload_timer") and self.auto_reload_timer.isActive():
+                self.auto_reload_timer.stop()
+        except Exception:
+            pass
+
+        # Best-effort: close the BrowserWindow
+        try:
+            bw = self._resolve_main_window()
+            if bw:
+                # Avoid re-entrancy issues: close on next tick
+                QTimer.singleShot(0, bw.close)
+        except Exception:
+            pass
+
+        # Log and then finish closing the controller
+        try:
+            if self.settings_manager:
+                self.settings_manager.log_system_event("controller", "Controller window closed")
         except Exception:
             pass
 
         super().closeEvent(event)
+
+
+    def _resolve_main_window(self):
+        """Return the live BrowserWindow instance, even if self.browser_window wasn't set."""
+        # Prefer the direct reference if provided
+        bw = getattr(self, "browser_window", None)
+        if bw:
+            return bw
+        # Fallback: scan top-level widgets
+        try:
+            for w in QApplication.topLevelWidgets():
+                # match by type name to avoid importing main_window here
+                if w.__class__.__name__ == "BrowserWindow":
+                    return w
+        except Exception:
+            pass
+        return None
 
     # -----------------------------------------------------------------
     def init_ui(self):
@@ -251,7 +350,6 @@ class BrowserControllerWindow(QMainWindow):
         group.setLayout(layout)
         return group
 
-
     def create_user_agent_section(self):
         group = QGroupBox("User Agent")
         layout = QVBoxLayout()
@@ -345,8 +443,7 @@ class BrowserControllerWindow(QMainWindow):
         layout.addWidget(self.auto_reload_screenshot_cb)
         
         group.setLayout(layout)
-        return group
-        
+        return group       
         
     def create_scripting_section(self):
         """Create scripting controls"""
