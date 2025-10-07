@@ -89,32 +89,66 @@ class BrowserControllerWindow(QMainWindow):
 
     # -----------------------------------------------------------------
     def init_ui(self):
-        # Central widget + root layout
         central = QWidget(self)
         self.setCentralWidget(central)
-        root = QVBoxLayout(central)
-        root.setContentsMargins(10, 10, 10, 10)
-        root.setSpacing(10)
+
+        layout = QVBoxLayout(central)
+        layout.setSpacing(10)
+        layout.setContentsMargins(10, 10, 10, 10)
+
+        # Title + status
+        title = QLabel("<h1>Browser Controller</h1>")
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+
+        self.status_label = QLabel("Ready")
+        self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setStyleSheet(
+            "QLabel { background:#1976d2; color:white; padding:10px; "
+            "border:2px solid #1565c0; border-radius:5px; font-weight:bold; font-size:11pt; }"
+        )
+        layout.addWidget(self.status_label)
 
         # Tabs
         self.tab_widget = QTabWidget(self)
-        root.addWidget(self.tab_widget)
+        layout.addWidget(self.tab_widget)
 
-        # ----- Settings tab -----
+        # --- Tab 1: Controls ---
+        controls_tab = QWidget(self)
+        controls_layout = QVBoxLayout(controls_tab)
+        controls_layout.setSpacing(10)
+
+        controls_layout.addWidget(self.create_navigation_section())
+        controls_layout.addWidget(self.create_quick_actions_section())
+        controls_layout.addWidget(self.create_auto_reload_section())
+        controls_layout.addWidget(self.create_screenshot_section())
+        controls_layout.addWidget(self.create_log_section())
+        controls_layout.addStretch(1)
+        self.tab_widget.addTab(controls_tab, "Controls")
+
+        # --- Tab 2: Scripting ---
+        script_tab = QWidget(self)
+        script_layout = QVBoxLayout(script_tab)
+        script_layout.setSpacing(10)
+
+        script_layout.addWidget(self.create_scripting_section())
+        script_layout.addStretch(1)
+        self.tab_widget.addTab(script_tab, "Scripting")
+
+        # --- Tab 3: Settings ---
         settings_tab = QWidget(self)
         settings_layout = QVBoxLayout(settings_tab)
-        settings_layout.setContentsMargins(8, 8, 8, 8)
-        settings_layout.setSpacing(8)
+        settings_layout.setSpacing(10)
 
-        # Sections (these methods were provided earlier)
         settings_layout.addWidget(self.create_user_agent_section())
         settings_layout.addWidget(self.create_proxy_section())
-        settings_layout.addWidget(self.create_app_settings_section())
-        settings_layout.addStretch(1)
 
+        # new: path + "Edit settings…" button
+        settings_layout.addWidget(self.create_app_settings_section())
+
+        settings_layout.addStretch(1)
         self.tab_widget.addTab(settings_tab, "Settings")
 
-        # Optional: a simple status label at the bottom (if you don't already have one)
         if not hasattr(self, "status_label"):
             self.status_label = QLabel("")
             self.status_label.setStyleSheet("color: gray;")
@@ -122,6 +156,9 @@ class BrowserControllerWindow(QMainWindow):
 
         if not self.statusBar():
             self.setStatusBar(QStatusBar(self))
+
+
+
 
     def create_user_agent_section(self):
         group = QGroupBox("User Agent")
