@@ -36,15 +36,6 @@ from .settings_dialog import SettingsDialog
 from qwsengine.about_dialog import AboutDialog
 from .browser_operations import BrowserOperations  # NEW IMPORT
 
-# WebView is referenced for type/behavior expectations; actual class is in BrowserTab.browser
-try:
-    from .webview import WebView  # noqa: F401
-except ImportError:
-    # Don't hard-fail here; BrowserTab will own the actual WebView instance.
-    pass
-
-
-
 class BrowserWindow(QMainWindow):
     """
     Main application window with tabbed browsing.
