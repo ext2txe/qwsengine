@@ -1,4 +1,3 @@
-#from pathlib import Path
 from PySide6.QtWidgets import QWidget, QVBoxLayout
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
 from PySide6.QtCore import Signal
@@ -36,9 +35,7 @@ class BrowserTab(QWidget):
         self.settings_manager = settings_manager
 
         # REPLACE your existing view creation line with this:
-        #self.view = WebView(self, on_create_window=on_create_window)
         prof = profile or getattr(self.settings_manager, "profile", None)
-        #self.view = WebView(self, profile=prof, on_create_window=on_create_window)
         self.view = WebView(self, profile=profile, on_create_window=on_create_window)
         self.browser = self.view   # keep legacy attribute alive
 

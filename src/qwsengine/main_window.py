@@ -29,21 +29,16 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineProfile
 from .app_info import APP_VERSION, LOG_DIR
 
+from .ui.menu_builder import MenuBuilder
+from .ui.toolbar_builder import ToolbarBuilder
+from .ui.tab_manager import TabManager
+
 # Import your tab widget (your traceback shows browser_tab.py)
 from .browser_tab import BrowserTab
 from .settings import SettingsManager
 from .settings_dialog import SettingsDialog
 from qwsengine.about_dialog import AboutDialog
 from .browser_operations import BrowserOperations  # NEW IMPORT
-
-# WebView is referenced for type/behavior expectations; actual class is in BrowserTab.browser
-try:
-    from .webview import WebView  # noqa: F401
-except ImportError:
-    # Don't hard-fail here; BrowserTab will own the actual WebView instance.
-    pass
-
-
 
 class BrowserWindow(QMainWindow):
     """
@@ -62,6 +57,11 @@ class BrowserWindow(QMainWindow):
         # Wrap provided settings manager (can be None) with a safe shim
         #self.settings_manager = _SafeSettings(settings_manager)
         self.settings_manager = SettingsManager()
+
+        #from .ui.menu_builder import MenuBuilder
+        self.menu_builder = MenuBuilder(self)
+        self.toolbar_builder = ToolbarBuilder(self)
+        self.tab_manager = TabManager(self)
 
         # NEW: Initialize browser operations utility
         self.browser_ops = BrowserOperations(
@@ -104,6 +104,10 @@ class BrowserWindow(QMainWindow):
         dlg.exec()
 
     def _setup_ui(self):
+
+        self.menu_builder.build_menu_bar()
+
+
         # --- Central layout with tabs --------------------------------------------
         central = QWidget(self)
         self.setCentralWidget(central)
@@ -112,57 +116,14 @@ class BrowserWindow(QMainWindow):
         vbox.setContentsMargins(0, 0, 0, 0)
 
         # ---Menu  ---------------------------------------------------
-        menu_bar = self._create_menu_bar()
-        vbox.addWidget(menu_bar)
 
         # --- Create Tool bar ---------------------------------------------------
-        toolbar = self._create_tool_bar()
+        toolbar = self.toolbar_builder.create_navigation_toolbar()
         vbox.addWidget(toolbar)
 
-        # q. how to get menu above the nav tool bar?
-        #vbox.add
-
-        # --- Create Tabs ---------------------------------------------------
-        self.tabs = QTabWidget(self)
-        self.tabs.setTabsClosable(True)
-        self.tabs.setMovable(True)
-        self.tabs.tabCloseRequested.connect(self._on_tab_close_requested)
-        self.tabs.currentChanged.connect(self._on_current_tab_changed)
+        # --- Create Tabs ---------------------------------------------------        
+        self.tabs = self.tab_manager.get_tab_widget()
         vbox.addWidget(self.tabs)
-
-        # --- BEGIN: Go / + buttons (single-step feature) ---
-
-
-        # Simple toolbar with URL box + Go + +
-        self.navbar = QToolBar("Navigation", self)
-        self.addToolBar(self.navbar)  # BrowserWindow should be a QMainWindow
-
-        self.url_edit = QLineEdit(self)
-        self.url_edit.setPlaceholderText("Enter URL and press Go…")
-        self.url_edit.returnPressed.connect(lambda: self._nav_go())
-
-        go_btn = QToolButton(self)
-        go_btn.setText("Go")
-        # go_btn.setCheckable(True)
-        # go_btn.clicked.connect(self._nav_go)
-        go_btn.clicked.connect(lambda: self._nav_go())
-
-        # Add a toolbar action instead of a toolbutton for Go
-        # self.go_action = self.navbar.addAction()
-        # self.go_action.triggered.connect(self._nav_go)
-
-        plus_btn = QToolButton(self)
-        plus_btn.setText("+")
-        #plus_btn.clicked.connect(lambda: self._new_tab(switch=True))
-        plus_btn.clicked.connect(lambda: self._nav_go())
-
-        self.navbar.addWidget(self.url_edit)
-        self.navbar.addWidget(go_btn)
-        self.navbar.addWidget(plus_btn)
-
-        
-        # --- END: Go / + buttons ---
-
 
         # --- Create Status bar ---------------------------------------------------
         self.status_bar = QStatusBar(self)
@@ -171,7 +132,7 @@ class BrowserWindow(QMainWindow):
         self._restore_window_state()
 
         # Initial tab
-        self._create_initial_tab()
+        self.tab_manager.create_initial_tab()
         self.status_bar.showMessage("Loading…", 2000)  # auto-clear after 2s
         
     def _nav_go(self):
@@ -187,150 +148,6 @@ class BrowserWindow(QMainWindow):
         q = QUrl.fromUserInput(text)
         if q.isValid():
             view.setUrl(q)   # or view.load(q)
-
-    def _create_tool_bar(self):
-        tb = QToolBar("Main Toolbar", self)
-        tb.setMovable(True)
-
-        # --- Nav: Back / Forward / Reload / Stop ---
-        back_action = QAction("Back", self)
-        back_action.setShortcut(QKeySequence.Back)
-        back_action.triggered.connect(self.back)
-        tb.addAction(back_action)
-
-        fwd_action = QAction("Forward", self)
-        fwd_action.setShortcut(QKeySequence.Forward)
-        fwd_action.triggered.connect(self.forward)
-        tb.addAction(fwd_action)
-
-        reload_action = QAction("Reload", self)
-        reload_action.setShortcut(QKeySequence.Refresh)
-        reload_action.triggered.connect(self.reload)
-        tb.addAction(reload_action)
-
-        stop_action = QAction("Stop", self)
-        stop_action.triggered.connect(self.stop)
-        tb.addAction(stop_action)
-
-        tb.addSeparator()
-
-        # --- URL bar ---
-        self.urlbar = QLineEdit(tb)
-        self.urlbar.setPlaceholderText("Enter URL and press Enter…")
-        self.urlbar.returnPressed.connect(self._on_urlbar_return_pressed)
-        self.urlbar.setClearButtonEnabled(True)
-        self.urlbar.setMinimumWidth(420)
-        tb.addWidget(self.urlbar)
-
-        go_action = QAction("Go", self)
-        go_action.setShortcut("Return")
-        go_action.setStatusTip("Navigate to the URL in the address bar")
-        go_action.triggered.connect(lambda checked=False: self.navigate_current(self.urlbar.text()))
-        tb.addAction(go_action)
-
-        # --- New tab (+) ---
-        plus_action = QAction("+", self)
-        plus_action.setStatusTip("Open a new tab")
-        plus_action.setShortcut("Ctrl+T")
-        plus_action.triggered.connect(lambda checked=False: self._new_tab(switch=True))
-        tb.addAction(plus_action)
-
-        # --- Home ---
-        home_action = QAction("Home", self)
-        home_action.setToolTip("Go to Start URL (from Settings)")
-        def _go_home():
-            url = self.settings_manager.get("start_url", "") or "about:blank"
-            self.navigate_current(url)
-        home_action.triggered.connect(_go_home)
-        tb.addAction(home_action)
-
-        # --- Existing save actions / scripts UI (kept from your code) ---
-        save_html_action = QAction("Save HTML", self)
-        save_html_action.setToolTip("Save the current tab's Document HTML")
-        save_html_action.triggered.connect(self.save_current_tab_html)
-        tb.addAction(save_html_action)
-
-        save_shot_action = QAction("Save Screenshot", self)
-        save_shot_action.setToolTip("Save a PNG screenshot of the current tab's visible page")
-        save_shot_action.triggered.connect(self.save_current_tab_screenshot)
-        tb.addAction(save_shot_action)
-
-        save_full_action = QAction("Save Full Page", self)
-        save_full_action.setToolTip("Capture the entire page (beyond viewport) as PNG")
-        save_full_action.triggered.connect(self.save_full_page_screenshot)
-        tb.addAction(save_full_action)
-
-        tb.addSeparator()
-
-        # --- Scripts UI (unchanged) ---
-        self.scripts_combo = QComboBox(tb)
-        self.scripts_combo.setMinimumWidth(240)
-        tb.addWidget(self.scripts_combo)
-
-        refresh_scripts_action = QAction("Refresh", self)
-        refresh_scripts_action.setToolTip("Reload the list of .js files from the scripts folder")
-        refresh_scripts_action.triggered.connect(self.refresh_scripts_list)
-        tb.addAction(refresh_scripts_action)
-
-        exec_script_action = QAction("Execute", self)
-        exec_script_action.setToolTip("Execute the selected JavaScript file in the current page")
-        exec_script_action.triggered.connect(self.execute_selected_script)
-        tb.addAction(exec_script_action)
-
-        open_scripts_action = QAction("Open Scripts Folder", self)
-        open_scripts_action.setToolTip("Open the scripts directory in your file manager")
-        open_scripts_action.triggered.connect(self.open_scripts_folder)
-        tb.addAction(open_scripts_action)
-
-        return tb
-
-    def _create_menu_bar(self):
-        menu_bar = QMenuBar()
-
-        file_menu = menu_bar.addMenu("File")
-
-        new_tab_action = QAction("New Tab", self)
-        new_tab_action.setShortcut("Ctrl+T")
-        new_tab_action.triggered.connect(self.create_new_tab)
-        file_menu.addAction(new_tab_action)
-
-        file_menu.addSeparator()
-
-        settings_action = QAction("Settings...", self)
-        settings_action.triggered.connect(self.open_settings)
-        file_menu.addAction(settings_action)
-
-        file_menu.addSeparator()
-
-        view_logs_action = QAction("View Logs...", self)
-        view_logs_action.triggered.connect(self.view_logs)
-        file_menu.addAction(view_logs_action)
-
-        file_menu.addSeparator()
-
-        clear_data_action = QAction("Clear Browser Data...", self)
-        clear_data_action.triggered.connect(self.clear_browser_data)
-        file_menu.addAction(clear_data_action)
-
-        file_menu.addSeparator()
-
-        exit_action = QAction("Exit", self)
-        exit_action.setShortcut("Ctrl+Q")
-        exit_action.triggered.connect(self.close)
-        file_menu.addAction(exit_action)
-
-        # Help menu (create if not existing)
-        help_menu = menu_bar.addMenu("&Help")
-        act_about = QAction("&About QWSEngine…", self)
-        act_about.triggered.connect(self.show_about_dialog)
-        help_menu.addAction(act_about)
-
-        help_menu.addSeparator()
-        view_settings_json_action = QAction("View settings.json", self)
-        view_settings_json_action.triggered.connect(self.view_settings_json)
-        help_menu.addAction(view_settings_json_action)
-
-        return menu_bar
 
     def clear_browser_data(self):
         reply = QMessageBox.question(self, "Clear Browser Data",
@@ -553,13 +370,13 @@ class BrowserWindow(QMainWindow):
         tw.currentChanged.connect(lambda _: self._sync_urlbar_with_current_tab())
         return tw
 
-    def _get_current_tab(self):
-        tw = self._get_tab_widget()
-        container = tw.currentWidget()
-        if not container:
-            return None
-        # BrowserTab is the direct child we added to the container
-        return container.findChild(BrowserTab)
+    # def _get_current_tab(self):
+    #     tw = self._get_tab_widget()
+    #     container = tw.currentWidget()
+    #     if not container:
+    #         return None
+    #     # BrowserTab is the direct child we added to the container
+    #     return container.findChild(BrowserTab)
 
     def _sync_urlbar_with_current_tab(self):
         tab = self._get_current_tab()
@@ -568,26 +385,6 @@ class BrowserWindow(QMainWindow):
                 self.urlbar.setText(self._view_of(tab).url().toString())
             except Exception:
                 pass
-
-    def create_tab_for_popup(self):
-        """Create a new tab for popups and switch focus to it."""
-        tab = self._new_tab(switch=True)       # <-- was switch=False
-        view = self._view_of(tab)
-        # Belt-and-suspenders to ensure focus lands on the new tab/view:
-        self.tabs.setCurrentWidget(tab)
-        view.setFocus()
-        return view
-
-    def _get_current_webview(self) -> QWebEngineView | None:
-        tab = self._get_current_tab()
-        if not tab:
-            return None
-        # Use the resolver you added earlier, or inline search:
-        try:
-            return self._view_of(tab)  # preferred if you added _view_of(...)
-        except Exception:
-            # fallback: find any QWebEngineView inside the tab
-            return tab.findChild(QWebEngineView)
 
     def back(self, checked: bool = False):
         w = self._get_current_webview()
@@ -614,99 +411,43 @@ class BrowserWindow(QMainWindow):
 
     # --- Public API for menu / shortcuts ----------------------------------------
     def create_new_tab(self, arg=None, *, switch: bool = True):
-        """
-        QAction.triggered(bool) passes a bool; ignore it.
-        Optional 'arg' may be a URL string/QUrl if someone calls programmatically.
-        """
-        # tolerate QAction's bool
-        if isinstance(arg, bool):
-            arg = None
+        """Create a new tab."""
+        return self.tab_manager.new_tab(switch=switch)
 
-        # create the tab
-        tab = self._new_tab(switch=switch)
+    def _new_tab(self, url=None, switch=True, profile=None, background=False):
+        """Internal tab creation."""
+        return self.tab_manager._new_tab(url=url, switch=switch, profile=profile, background=background)
 
-        # if a URL was provided, load it
-        if arg is not None:
-            try:
-                qurl = self._normalize_to_url(arg)
-                self._load_in_tab(tab, qurl)
-            except Exception:
-                pass
-        return tab
+    def _get_current_tab(self):
+        """Get current tab."""
+        return self.tab_manager.get_current_tab()
+
+    def _get_current_webview(self):
+        """Get current webview."""
+        return self.tab_manager.get_current_view()
+
+    def open_url_in_new_tab(self, url, switch=True):
+        """Open URL in new tab."""
+        return self.tab_manager.open_url_in_new_tab(url, switch)
+
+    def navigate_current(self, url):
+        """Navigate current tab."""
+        self.tab_manager.navigate_current(url)
+
+    def create_tab_for_popup(self):
+        """Create tab for popup."""
+        return self.tab_manager.create_tab_for_popup()
+
+    def _create_new_tab_and_return_view(self):
+        """Create tab and return view (for window.open)."""
+        return self.tab_manager._handle_new_window_request()
+
 
     def _update_tab_title(self, tab, title: str):
         i = self.tabs.indexOf(tab)
         if i != -1:
             self.tabs.setTabText(i, title if title else "New Tab")
 
-
-    # --- URL helpers ------------------------------------------------------------
-    def _normalize_to_url(self, url) -> QUrl:
-        if isinstance(url, QUrl):
-            return url
-        s = (url or "").strip()
-        if not s:
-            return QUrl("about:blank")
-        q = QUrl(s)
-        if not q.scheme():
-            # Treat bare words as hostnames
-            q = QUrl(f"https://{s}")
-        return q
-
-    def navigate_current(self, url):
-        """Navigate the current tab to a URL/string."""
-        tab = self._get_current_tab()
-        if not tab:
-            return
-        qurl = self._normalize_to_url(url)
-        try:
-            self._view_of(tab).setUrl(qurl)
-        except Exception:
-            pass
-
-    def _load_in_tab(self, tab, qurl):
-        try:
-            if hasattr(self, "urlbar"):
-                self.urlbar.setText(qurl.toString())
-        except Exception:
-            pass
-        self._view_of(tab).setUrl(qurl)
-
-
-    # =========================================================================
-    # Internal wiring and helpers
-    # =========================================================================
-    def _create_initial_tab(self):
-        # Create the tab first (so it exists in the tab widget)
-        tab = self._new_tab(switch=True)
-
-        # Resolve the initial URL
-        qurl = self._initial_url()
-
-        # Load it on the next event loop tick so the view is fully ready
-        view = self._view_of(tab)
-        QTimer.singleShot(0, lambda: view.setUrl(qurl))
-
-    def _get_current_tab(self):
-        """Return the current BrowserTab or None."""
-        w = self.tabs.currentWidget()
-        return w if w and hasattr(w, "browser") else None
-
-    def _wire_tab_signals(self, tab, container, retries: int = 20):
-        v = self._view_of(tab)
-        if v is None:
-            if retries > 0:
-                QTimer.singleShot(50, lambda t=tab, c=container, r=retries-1: self._wire_tab_signals(t, c, r))
-            else:
-                try: 
-                    self.settings_manager.log_error("main_window", "Timed out waiting for web view in BrowserTab")
-                except Exception: 
-                    pass
-            return
-        # connect once we have the view
-        v.titleChanged.connect(lambda t, c=container: self._on_tab_title_changed(c, t))
-        v.urlChanged.connect(lambda q, c=container: self._on_tab_url_changed(c, q))
-    
     def _on_tab_title_changed(self, container, title: str):
         tw = self._get_tab_widget()
         i = tw.indexOf(container)
@@ -719,165 +460,6 @@ class BrowserWindow(QMainWindow):
         tw = self._get_tab_widget()
         if tw.currentWidget() is container and hasattr(self, "urlbar"):
             self.urlbar.setText(qurl.toString())
-
-    def _wire_tab(self, tab):
-        """
-        Connect signals and wire WebView so target=_blank/window.open() creates a real tab.
-        Call this exactly once for every new tab.
-        """
-        # Optional signals provided by BrowserTab
-        try:
-            tab.loadStarted.connect(self.on_tab_load_started)
-        except Exception:
-            pass
-        try:
-            tab.loadFinished.connect(self.on_tab_load_finished)
-        except Exception:
-            pass
-
-        # Critical: provide a factory for QWebEngineView.createWindow()
-        if hasattr(tab, "browser") and hasattr(self._view_of(tab), "set_create_window_handler"):
-            self._view_of(tab).set_create_window_handler(self._create_new_tab_and_return_view)
-
-        # Optional legacy: signal-based new tab requests
-        if hasattr(tab, "browser") and hasattr(self._view_of(tab), "newTabRequested"):
-            self._view_of(tab).newTabRequested.connect(self.open_url_in_new_tab)
-
-        # Keep URL bar in sync if possible
-        try:
-            self._view_of(tab).urlChanged.connect(self._on_browser_url_changed)
-        except Exception:
-            pass
-
-        # Keep tab title in sync
-        try:
-            self._view_of(tab).titleChanged.connect(self._on_browser_title_changed)
-        except Exception:
-            pass
-
-
-    # --- Public tab-creation API (menu actions / external callers) ----------
-    def _new_tab(self, url: QUrl | str | None = None, switch: bool = True, profile: QWebEngineProfile | None = None, background: bool = False):
-        #prof = profile or QWebEngineProfile.defaultProfile()
-        prof = (
-            profile
-            or getattr(self.settings_manager, "web_profile", None)
-            or getattr(self.settings_manager, "profile", None)
-            or QWebEngineProfile.defaultProfile()
-        )
-
-        self._apply_user_agent_to_profile(prof)
-        
-        tab = BrowserTab(
-            self.settings_manager,
-            profile=prof,
-            on_create_window=self.create_tab_for_popup,
-            parent=self.tabs
-        )
-
-        idx = self.tabs.addTab(tab, "New Tab")
-        if switch and not background:
-            self.tabs.setCurrentIndex(idx)
-
-        view = self._view_of(tab)
-        view.titleChanged.connect(lambda title, t=tab: self._update_tab_title(t, title))
-
-
-        # Defer navigation until after the widget is in the tab
-        if url:
-            qurl = QUrl(url) if isinstance(url, str) else url
-            QTimer.singleShot(0, lambda: view.setUrl(qurl))
-
-        # (Optional) keep your existing signal wiring here
-        # view.titleChanged.connect(lambda title, i=idx: self.tabs.setTabText(i, title or "New Tab"))
-
-        return tab
-
-    def open_url_in_new_tab(self, url: Union[str, QUrl], switch: bool = True):
-        """
-        Back-compat helper used by some signal flows (e.g., WebViewOld.newTabRequested(QUrl)).
-        Normalizes a URL/string and opens it in a fresh tab.
-        """
-        qurl = url if isinstance(url, QUrl) else self._normalize_to_url(str(url))
-        tab = self._new_tab(switch=switch)
-        try:
-            self._load_in_tab(tab, qurl)
-        except Exception:
-            pass
-        return tab
-
-    def _create_new_tab_and_return_view(self):
-        """
-        Factory handed to WebView.createWindow().
-        Must return the *WebView* of a brand new tab for Qt to load into.
-        """
-        new_tab = self._new_tab(switch=True)  # no URL; Qt navigates this view
-        return new_tab.browser
-
-    def _load_in_tab(self, tab, qurl, retries: int = 20):
-        # reflect in the URL bar immediately
-        try:
-            if hasattr(self, "urlbar"):
-                self.urlbar.setText(qurl.toString())
-        except Exception:
-            pass
-
-        v = self._view_of(tab)
-        if v is None:
-            if retries > 0:
-                QTimer.singleShot(50, lambda t=tab, u=qurl, r=retries-1: self._load_in_tab(t, u, r))
-            else:
-                try: 
-                    self.settings_manager.log_error("main_window", f"Failed to load {qurl.toString()}: web view not ready")
-                except Exception: 
-                    pass
-            return
-        v.setUrl(qurl)
-
-    def _normalize_to_url(self, text: str) -> QUrl:
-        """Best-effort conversion of user text to a QUrl."""
-        text = (text or "").strip()
-        if not text:
-            return QUrl("about:blank")
-
-        url = QUrl(text)
-        if url.isValid() and not url.scheme():
-            url.setScheme("http")
-        if not url.isValid():
-            # Treat as a search query (basic fallback)
-            url = QUrl("https://www.google.com/search?q=" + QUrl.toPercentEncoding(text).data().decode("utf-8"))
-        return url
-
-    def _on_tab_close_requested(self, index: int):
-        if index < 0:
-            return
-        w = self.tabs.widget(index)
-        self.tabs.removeTab(index)
-        if w:
-            w.deleteLater()
-
-    def _on_current_tab_changed(self, index: int):
-        tab = self._get_current_tab()
-        if not tab:
-            self.urlbar.clear()
-            return
-        try:
-            current_url = self._view_of(tab).url()
-            if isinstance(current_url, QUrl):
-                self.urlbar.setText(current_url.toString())
-        except Exception:
-            pass
-
-    def _on_browser_url_changed(self, qurl: QUrl):
-        # Update URL bar only when the active tab changes URL
-        current = self._get_current_tab()
-        if current and self.sender() == getattr(current, "browser", None):
-            self.urlbar.setText(qurl.toString())
-
-    def _on_browser_title_changed(self, title: str):
-        idx = self.tabs.currentIndex()
-        if idx >= 0:
-            self.tabs.setTabText(idx, title if title else "New Tab")
 
     def _on_urlbar_return_pressed(self):
         text = self.urlbar.text()
