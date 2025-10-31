@@ -57,6 +57,10 @@ class ToolbarBuilder:
         
         # Scripts UI
         self._add_scripts_controls(tb)
+
+        #self.window.setTabOrder(self.urlbar, self.go_button)
+        #self.window.setTabOrder(self.go_button, self.scripts_combo)
+            
         
         return tb
     
@@ -92,18 +96,51 @@ class ToolbarBuilder:
         self.urlbar.returnPressed.connect(self.window._on_urlbar_return_pressed)
         self.urlbar.setClearButtonEnabled(True)
         self.urlbar.setMinimumWidth(420)
-        toolbar.addWidget(self.urlbar)
         
-        # Store reference on window
-        self.window.urlbar = self.urlbar
+        # Sync URL to controller when Enter is pressed
+        self.urlbar.returnPressed.connect(lambda: self._on_url_text_changed(self.urlbar.text()))
+        
+        toolbar.addWidget(self.urlbar)
         
         # Go button
         go_action = QAction("Go", self.window)
         go_action.setShortcut("Return")
         go_action.setStatusTip("Navigate to the URL in the address bar")
         go_action.triggered.connect(lambda checked=False: self.window.navigate_current(self.urlbar.text()))
+        
+        # ALSO sync to controller when Go button is clicked
+        go_action.triggered.connect(lambda: self._on_url_text_changed(self.urlbar.text()))
+        
+        toolbar.addAction(go_action)
+            
+    # When Go is clicked, also sync to controller
+    def on_go_clicked():
+        url_text = self.urlbar.text()
+        self._on_url_text_changed(url_text)
+        self.window.navigate_current(url_text)
+    
+        go_action.triggered.connect(on_go_clicked)
         toolbar.addAction(go_action)
     
+    def _add_go_button(self, toolbar: QToolBar) -> QAction:
+        """
+        Add Go button.
+        
+        Returns:
+            Go action
+        """
+        from PySide6.QtWidgets import QPushButton
+        
+        # Create Go button as widget (not action) for better tab order
+        self.go_button = QPushButton("GO", self.window)
+        self.go_button.setToolTip("Navigate to URL")
+        self.go_button.clicked.connect(
+            lambda: self.window.navigate_current(self.urlbar.text())
+        )
+        toolbar.addWidget(self.go_button)
+        
+        return self.go_button
+
     def _add_new_tab_button(self, toolbar: QToolBar):
         """Add new tab (+) button."""
         plus_action = QAction("+", self.window)
@@ -182,6 +219,7 @@ class ToolbarBuilder:
         return self.urlbar
     
     def get_scripts_combo(self) -> QComboBox:
+
         """
         Get the scripts combo box.
         
@@ -189,3 +227,38 @@ class ToolbarBuilder:
             Scripts combo box
         """
         return self.scripts_combo
+
+    def _on_url_text_changed(self, text: str):
+        """
+        Handle URL text changes and sync to controller window.
+        
+        Args:
+            text: New URL text
+        """
+        from PySide6.QtWidgets import QApplication
+        
+        # Debug: Check if method is being called
+        print(f"DEBUG: URL text changed to: {text}")
+        
+        # Find controller window
+        controller_found = False
+        for widget in QApplication.topLevelWidgets():
+            class_name = widget.__class__.__name__
+            print(f"DEBUG: Checking widget: {class_name}")
+            
+            # Check if it's the controller window
+            if class_name == "BrowserControllerWindow":
+                controller_found = True
+                print(f"DEBUG: Found controller window!")
+                
+                # Update the navigation URL field in controller
+                if hasattr(widget, 'url_input'):
+                    print(f"DEBUG: Updating url_input to: {text}")
+                    widget.url_input.setText(text)
+                else:
+                    print(f"DEBUG: Controller has no 'url_input' attribute")
+                    print(f"DEBUG: Available attributes: {[a for a in dir(widget) if 'url' in a.lower()]}")
+                break
+        
+        if not controller_found:
+            print("DEBUG: Controller window not found")

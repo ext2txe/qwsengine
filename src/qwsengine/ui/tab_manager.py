@@ -165,6 +165,10 @@ class TabManager:
         if view and hasattr(view, 'load'):
             view.load(qurl)
             self.window._log(f"Loaded {qurl.toString()} in tab")
+
+            # ADD THIS: Update URL bar when loading
+            self._sync_urlbar_with_tab(qurl)
+
         elif retries > 0:
             # Tab might not be fully initialized, retry
             QTimer.singleShot(50, lambda: self._load_in_tab(tab, qurl, retries - 1))

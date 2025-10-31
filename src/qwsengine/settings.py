@@ -67,6 +67,9 @@ class SettingsManager:
             "proxy_user": "",
             "proxy_password": "",
 
+            # Add these two new settings here:
+            "auto_launch_browser": True,  # Whether to auto-launch browser on startup
+
             # if accept_language is "", then headers will not be inserted
             "accept_language": "en-US,en;q=0.9",
             "send_dnt": False,

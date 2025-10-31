@@ -133,6 +133,13 @@ class BrowserWindow(QMainWindow):
 
         # Initial tab
         self.tab_manager.create_initial_tab()
+
+        initial_tab = self.tab_manager.get_current_tab()
+        if initial_tab and initial_tab.view:
+            initial_url = initial_tab.view.url()
+            if self.toolbar_builder.urlbar:
+                self.toolbar_builder.urlbar.setText(initial_url.toString())
+
         self.status_bar.showMessage("Loading…", 2000)  # auto-clear after 2s
         
     def _nav_go(self):
