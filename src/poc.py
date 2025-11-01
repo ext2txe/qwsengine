@@ -23,6 +23,26 @@ from copy import deepcopy
 
 
 # ---------------------------
+# API 
+# ---------------------------
+
+
+# poc.py
+def detect_repeating_items(dom_root) -> list[dict]:
+    """
+    Returns candidates: [{"css": str, "xpath": str, "score": float, "count": int}]
+    Implement using your existing subtree-hash/sibling-similarity helpers.
+    """
+    ...
+
+def infer_selector_from_clicks(clicked_nodes) -> dict:
+    """
+    clicked_nodes: list of DOM nodes from the WebEngine bridge
+    Returns {"css": str, "xpath": str}
+    """
+    ...
+
+# ---------------------------
 # Heuristics & DOM utilities
 # ---------------------------
 
