@@ -11,11 +11,13 @@ import sys
 from typing import Optional, List, Dict
 
 from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, QFileInfo, QSize
+
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QTextEdit, QFileDialog, QMessageBox, QDockWidget,
-    QWidget, QVBoxLayout, QHBoxLayout, QTableView, QPushButton, QGroupBox, QToolBar,
-    QStatusBar, QAction
+    QWidget, QVBoxLayout, QHBoxLayout, QTableView, QPushButton, QGroupBox,
+    QToolBar, QStatusBar
 )
+from PySide6.QtGui import QAction
 
 from poc import detect_repeating_items
 from scopes import HtmlDoc
