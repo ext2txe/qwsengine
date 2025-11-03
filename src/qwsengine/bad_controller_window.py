@@ -6,7 +6,7 @@ from PySide6.QtCore import QTimer, Qt, QSettings, QByteArray, QCoreApplication, 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QGroupBox, QTabWidget,
-    QSpinBox, QCheckBox, QStatusBar, QTextEdit, QComboBox
+    QSpinBox, QCheckBox, QStatusBar, QTextEdit
 )
 
 # Project
@@ -20,7 +20,7 @@ from .settings_dialog import SettingsDialog
 from .settings import SettingsManager
 from .browser_operations import BrowserOperations  # NEW IMPORT
 
-class BrowserControllerWindow(QMainWindow):
+class BADBrowserControllerWindow(QMainWindow):
     def __init__(self, browser_window=None, parent=None, settings_manager=None):
         super().__init__(parent)
         self.browser_window = browser_window
@@ -174,7 +174,7 @@ class BrowserControllerWindow(QMainWindow):
         except Exception:
             pass
         return None
-        
+
     def _get_current_tab(self):
         """Get the currently active tab from the main window"""
         main_window = self._resolve_main_window()
@@ -204,7 +204,7 @@ class BrowserControllerWindow(QMainWindow):
         )
         layout.addWidget(self.status_label)
 
-        # Tab control
+        # Tabs
         self.tab_widget = QTabWidget(self)
         layout.addWidget(self.tab_widget)
 
@@ -213,7 +213,6 @@ class BrowserControllerWindow(QMainWindow):
         controls_layout = QVBoxLayout(controls_tab)
         controls_layout.setSpacing(10)
 
-        controls_layout.addWidget(self.create_browser_launch_settings())
         controls_layout.addWidget(self.create_navigation_section())
         controls_layout.addWidget(self.create_quick_actions_section())
         controls_layout.addWidget(self.create_auto_reload_section())
@@ -238,111 +237,119 @@ class BrowserControllerWindow(QMainWindow):
 
         settings_layout.addWidget(self.create_user_agent_section())
         settings_layout.addWidget(self.create_proxy_section())
+
+        # Add browser launch settings (NEW)
+        settings_layout.addWidget(self.create_browser_launch_settings())
+
+        # new: path + "Edit settings…" button
         settings_layout.addWidget(self.create_app_settings_section())
+
         settings_layout.addStretch(1)
         self.tab_widget.addTab(settings_tab, "Settings")
 
-        # Status bar
-        self.statusBar().showMessage("Ready")
+        if not hasattr(self, "status_label"):
+            self.status_label = QLabel("")
+            self.status_label.setStyleSheet("color: gray;")
+            layout.addWidget(self.status_label)
 
+        if not self.statusBar():
+            self.setStatusBar(QStatusBar(self))
+
+    # NEW METHOD: Launch browser functionality
     def launch_browser(self):
-        """Launch a new browser window."""
-        if getattr(self, "browser_window", None):
-            if self.browser_window.isVisible():
-                self.update_status("Browser window already open")
-                self.browser_window.activateWindow()  # Bring to front
-                return
-            # Otherwise it exists but is hidden; show it again
-            self.browser_window.show()
-            self.update_status("Browser window restored")
+        """Launch a browser window if not already connected."""
+        if self.browser_window and hasattr(self.browser_window, 'isVisible') and self.browser_window.isVisible():
+            # Already have a browser window, just activate it
+            self.browser_window.activateWindow()
+            self.update_status("Browser window activated")
             return
-
-        # Get full module path to ensure proper imports
-        from importlib import import_module
-        try:
-            # Try direct import
-            from ..qwsengine.main_window import BrowserWindow
-        except (ImportError, ValueError):
-            try:
-                # Try absolute import
-                from qwsengine.main_window import BrowserWindow
-            except ImportError:
-                # Last resort: dynamic import
-                mod = import_module("qwsengine.main_window")
-                BrowserWindow = getattr(mod, "BrowserWindow")
-
-        try:
-            # Create new browser window with our settings
-            self.browser_window = BrowserWindow(settings_manager=self.settings_manager)
-            self.browser_window.show()
-            self.update_status("Browser window launched")
-            
-            # Start auto-reload timer if enabled
-            self._update_auto_reload_state()
-            
-        except Exception as e:
-            self.update_status(f"Failed to launch browser: {e}", level="ERROR")
-            self.log_command(f"Launch browser error: {e}")
-
-    def create_browser_launch_settings(self):
-        """Create browser launch settings"""
-        group = QGroupBox("Browser")
-        layout = QVBoxLayout()
         
-        # Launch button
+        try:
+            from .main_window import BrowserWindow
+            
+            # Create browser window
+            self.browser_window = BrowserWindow(settings_manager=self.settings_manager)
+            
+            # Show the window
+            self.browser_window.show()
+            
+            # Update status
+            self.update_status("Browser launched and connected")
+        except Exception as e:
+            self.update_status(f"Failed to launch browser: {e}", "ERROR")
+
+    # NEW METHOD: Browser launch settings
+    def create_browser_launch_settings(self):
+        """Create settings for browser auto-launch."""
+        group = QGroupBox("Browser Launch Settings")
+        layout = QVBoxLayout(group)
+        
+        # Auto-launch checkbox
+        self.auto_launch_cb = QCheckBox("Launch browser automatically on startup")
+        
+        # Set initial state based on setting
+        if self.settings_manager:
+            auto_launch = self.settings_manager.get("auto_launch_browser", True)
+            self.auto_launch_cb.setChecked(auto_launch)
+        
+        # Connect to save settings when changed
+        self.auto_launch_cb.stateChanged.connect(self._on_auto_launch_changed)
+        
+        layout.addWidget(self.auto_launch_cb)
+        
+        # Startup URL
+        url_layout = QHBoxLayout()
+        url_layout.addWidget(QLabel("Startup URL:"))
+        
+        self.start_url_input = QLineEdit()
+        
+        # Set initial URL from settings
+        if self.settings_manager:
+            start_url = self.settings_manager.get("start_url", "")
+            self.start_url_input.setText(start_url)
+        
+        # Connect to save settings when changed
+        self.start_url_input.editingFinished.connect(self._on_start_url_changed)
+        
+        url_layout.addWidget(self.start_url_input)
+        layout.addLayout(url_layout)
+        
+        # Launch browser now button
         launch_btn = QPushButton("Launch Browser")
         launch_btn.clicked.connect(self.launch_browser)
-        launch_btn.setStyleSheet("""
-            QPushButton { 
-                background-color: #4caf50; 
-                color: white; 
-                padding: 10px; 
-                font-weight: bold;
-                font-size: 12pt;
-            }
-            QPushButton:hover {
-                background-color: #388e3c;
-            }
-        """)
         layout.addWidget(launch_btn)
         
-        # Auto-launch setting
-        auto_layout = QHBoxLayout()
-        self.auto_launch_cb = QCheckBox("Auto-launch browser")
-        self.auto_launch_cb.setChecked(True)  # Default to true
-        self.auto_launch_cb.stateChanged.connect(self._on_auto_launch_changed)
-        auto_layout.addWidget(self.auto_launch_cb)
-        layout.addLayout(auto_layout)
-        
-        # Start URL
-        start_url_layout = QHBoxLayout()
-        start_url_layout.addWidget(QLabel("Start URL:"))
-        self.start_url_input = QLineEdit()
-        self.start_url_input.setText("https://www.google.com")
-        self.start_url_input.returnPressed.connect(self._on_start_url_changed)
-        start_url_layout.addWidget(self.start_url_input)
-        layout.addLayout(start_url_layout)
-        
-        group.setLayout(layout)
         return group
-    
+
+    # NEW METHOD: Handler for auto-launch setting
     def _on_auto_launch_changed(self, state):
+        """Save auto-launch setting when changed."""
         if not self.settings_manager:
             return
-            
-        enabled = (state == Qt.Checked)
-        self.settings_manager.set("auto_launch_browser", enabled)
-        self.settings_manager.save()
-        self.update_status(f"Auto-launch browser {'enabled' if enabled else 'disabled'}")
-    
+        
+        auto_launch = (state == Qt.Checked)
+        self.settings_manager.set("auto_launch_browser", auto_launch)
+        
+        # Save settings if possible
+        if hasattr(self.settings_manager, "save"):
+            self.settings_manager.save()
+        
+        self.update_status(f"Browser auto-launch {'enabled' if auto_launch else 'disabled'}")
+
+    # NEW METHOD: Handler for start URL setting
     def _on_start_url_changed(self):
+        """Save startup URL when changed."""
         if not self.settings_manager:
             return
-            
-        url = self.start_url_input.text().strip()
-        self.settings_manager.set("start_url", url)
-        self.settings_manager.save()
-        self.update_status(f"Start URL set to: {url}")
+        
+        start_url = self.start_url_input.text().strip()
+        self.settings_manager.set("start_url", start_url)
+        
+        # Save settings if possible
+        if hasattr(self.settings_manager, "save"):
+            self.settings_manager.save()
+        
+        self.update_status("Startup URL saved")
 
     def create_navigation_section(self):
         """Create navigation controls"""
@@ -405,306 +412,298 @@ class BrowserControllerWindow(QMainWindow):
         new_tab_btn.clicked.connect(self.on_new_tab)
         layout.addWidget(new_tab_btn)
         
+
         # Save HTML button
         save_html_btn = QPushButton("Save HTML")
         save_html_btn.setToolTip("Save the current page's HTML content")
         save_html_btn.clicked.connect(self.on_save_html)
         layout.addWidget(save_html_btn)
-        
         # Open Dev Tools
         dev_tools_btn = QPushButton("Open Developer Tools")
         dev_tools_btn.clicked.connect(self.on_open_dev_tools)
         layout.addWidget(dev_tools_btn)
         
         # Show/hide elements
-        toggle_btn = QPushButton("Toggle Element")
-        toggle_btn.clicked.connect(self.on_toggle_element)
-        layout.addWidget(toggle_btn)
-        
+        toggle_element_btn = QPushButton("Toggle Element Visibility")
+        toggle_element_btn.clicked.connect(self.on_toggle_element)
+        layout.addWidget(toggle_element_btn)
+
         group.setLayout(layout)
         return group
 
     def create_auto_reload_section(self):
-        """Create auto reload section"""
-        group = QGroupBox("Auto Reload")
+        """Create auto-reload controls"""
+        group = QGroupBox("Auto-Reload")
         layout = QVBoxLayout()
         
-        # Enable/disable
-        enable_layout = QHBoxLayout()
-        self.auto_reload_cb = QCheckBox("Enable Auto Reload")
-        self.auto_reload_cb.stateChanged.connect(self.on_auto_reload_toggle)
-        enable_layout.addWidget(self.auto_reload_cb)
-        layout.addLayout(enable_layout)
+        # Enable checkbox
+        self.auto_reload_cb = QCheckBox("Enable auto-reload")
+        self.auto_reload_cb.stateChanged.connect(self.on_auto_reload_changed)
+        layout.addWidget(self.auto_reload_cb)
         
-        # Interval
+        # Interval slider
         interval_layout = QHBoxLayout()
-        interval_layout.addWidget(QLabel("Interval (seconds):"))
+        interval_layout.addWidget(QLabel("Interval:"))
+        
         self.reload_interval = QSpinBox()
-        self.reload_interval.setMinimum(1)
-        self.reload_interval.setMaximum(3600)  # 1 hour max
-        self.reload_interval.setValue(10)  # Default: 10 seconds
+        self.reload_interval.setRange(1, 3600)
+        self.reload_interval.setValue(15)
+        self.reload_interval.setSuffix(" seconds")
         self.reload_interval.valueChanged.connect(self.on_interval_changed)
+        
         interval_layout.addWidget(self.reload_interval)
         layout.addLayout(interval_layout)
         
-        # Status
-        self.reload_status = QLabel("Auto reload: Disabled")
-        layout.addWidget(self.reload_status)
+        # Start/stop button
+        self.reload_btn = QPushButton("Start Auto-Reload")
+        self.reload_btn.clicked.connect(self.on_toggle_auto_reload)
+        layout.addWidget(self.reload_btn)
         
         group.setLayout(layout)
         return group
 
     def create_screenshot_section(self):
         """Create screenshot controls"""
-        group = QGroupBox("Screenshot")
+        group = QGroupBox("Screenshots")
         layout = QVBoxLayout()
         
-        # Capture visible part
-        visible_btn = QPushButton("Capture Visible Part")
-        visible_btn.clicked.connect(self.on_capture_visible)
-        layout.addWidget(visible_btn)
+        # Regular screenshot
+        screenshot_btn = QPushButton("Take Screenshot")
+        screenshot_btn.clicked.connect(self.on_take_screenshot)
+        layout.addWidget(screenshot_btn)
         
-        # Capture full page
-        full_page_btn = QPushButton("Capture Full Page")
-        full_page_btn.clicked.connect(self.on_capture_full_page)
+        # Full page screenshot
+        full_page_btn = QPushButton("Full Page Screenshot")
+        full_page_btn.clicked.connect(self.on_take_full_page_screenshot)
         layout.addWidget(full_page_btn)
         
         group.setLayout(layout)
         return group
-    
+
     def create_log_section(self):
-        """Create log output section"""
+        """Create log output area"""
         group = QGroupBox("Command Log")
         layout = QVBoxLayout()
         
-        # Log output text area
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
-        self.log_output.setMaximumHeight(120)
+        self.log_output.setMaximumHeight(100)
         layout.addWidget(self.log_output)
         
         group.setLayout(layout)
         return group
-    
+
     def create_scripting_section(self):
-        """Create scripting controls"""
+        """Create scripting UI"""
         group = QGroupBox("JavaScript Execution")
         layout = QVBoxLayout()
         
-        # Script input
-        script_label = QLabel("JavaScript:")
-        layout.addWidget(script_label)
-        
-        self.script_input = QTextEdit()
-        self.script_input.setPlaceholderText("Enter JavaScript to execute in the current tab")
-        self.script_input.setMinimumHeight(200)
-        layout.addWidget(self.script_input)
+        # JavaScript editor
+        layout.addWidget(QLabel("Enter JavaScript code:"))
+        self.script_editor = QTextEdit()
+        self.script_editor.setPlaceholderText("console.log('Hello world!');")
+        layout.addWidget(self.script_editor)
         
         # Execute button
-        exec_layout = QHBoxLayout()
-        exec_btn = QPushButton("Execute Script")
-        exec_btn.clicked.connect(self.on_execute_script)
-        exec_layout.addWidget(exec_btn)
-        layout.addLayout(exec_layout)
+        button_layout = QHBoxLayout()
         
-        # Result display
-        result_label = QLabel("Result:")
-        layout.addWidget(result_label)
+        run_btn = QPushButton("Run Script")
+        run_btn.clicked.connect(self.on_run_script)
+        button_layout.addWidget(run_btn)
         
-        self.script_result = QTextEdit()
-        self.script_result.setReadOnly(True)
-        self.script_result.setMinimumHeight(100)
-        layout.addWidget(self.script_result)
+        save_btn = QPushButton("Save Script")
+        save_btn.clicked.connect(self.on_save_script)
+        button_layout.addWidget(save_btn)
+        
+        load_btn = QPushButton("Load Script")
+        load_btn.clicked.connect(self.on_load_script)
+        button_layout.addWidget(load_btn)
+        
+        layout.addLayout(button_layout)
         
         group.setLayout(layout)
         return group
-    
+
     def create_user_agent_section(self):
         """Create user agent controls"""
         group = QGroupBox("User Agent")
         layout = QVBoxLayout()
         
         # User agent input
-        ua_layout = QVBoxLayout()
-        ua_label = QLabel("Custom User Agent:")
-        ua_layout.addWidget(ua_label)
-        
+        layout.addWidget(QLabel("Custom User Agent:"))
         self.user_agent_input = QLineEdit()
-        self.user_agent_input.setPlaceholderText("Enter custom User-Agent string")
-        ua_layout.addWidget(self.user_agent_input)
-        layout.addLayout(ua_layout)
+        self.user_agent_input.setPlaceholderText("Mozilla/5.0 (Windows NT 10.0; Win64; x64)...")
+        layout.addWidget(self.user_agent_input)
         
         # Apply button
         apply_btn = QPushButton("Apply User Agent")
         apply_btn.clicked.connect(self.on_apply_user_agent)
         layout.addWidget(apply_btn)
         
-        # Reset button
-        reset_btn = QPushButton("Reset to Default")
-        reset_btn.clicked.connect(self.on_reset_user_agent)
-        layout.addWidget(reset_btn)
+        # Common presets
+        layout.addWidget(QLabel("Presets:"))
+        presets_layout = QHBoxLayout()
         
-        # Preset dropdown
-        preset_label = QLabel("Presets:")
-        layout.addWidget(preset_label)
+        chrome_btn = QPushButton("Chrome")
+        chrome_btn.clicked.connect(lambda: self.on_preset_user_agent("chrome"))
+        presets_layout.addWidget(chrome_btn)
         
-        self.ua_presets = QComboBox()
-        self.ua_presets.addItem("Chrome Windows", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-        self.ua_presets.addItem("Firefox Windows", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0")
-        self.ua_presets.addItem("Safari macOS", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15")
-        self.ua_presets.addItem("Edge Windows", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 Edg/91.0.864.59")
-        self.ua_presets.addItem("Chrome Android", "Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.120 Mobile Safari/537.36")
-        self.ua_presets.addItem("iPhone", "Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1")
+        firefox_btn = QPushButton("Firefox")
+        firefox_btn.clicked.connect(lambda: self.on_preset_user_agent("firefox"))
+        presets_layout.addWidget(firefox_btn)
         
-        self.ua_presets.currentIndexChanged.connect(self.on_ua_preset_selected)
-        layout.addWidget(self.ua_presets)
+        mobile_btn = QPushButton("Mobile")
+        mobile_btn.clicked.connect(lambda: self.on_preset_user_agent("mobile"))
+        presets_layout.addWidget(mobile_btn)
         
-        self.ua_status = QLabel("Status: Using default")
-        layout.addWidget(self.ua_status)
+        layout.addLayout(presets_layout)
         
         group.setLayout(layout)
         return group
-    
+
     def create_proxy_section(self):
-        """Create proxy settings controls"""
+        """Create proxy settings"""
         group = QGroupBox("Proxy Settings")
-        layout = QVBoxLayout()
+        layout = QVBoxLayout(group)
         
-        # Enable proxy
-        self.proxy_enabled_cb = QCheckBox("Enable Proxy")
+        # Enabled checkbox
+        self.proxy_enabled_cb = QCheckBox("Use Proxy")
         self.proxy_enabled_cb.stateChanged.connect(self.on_proxy_enabled_changed)
         layout.addWidget(self.proxy_enabled_cb)
         
-        # Proxy type (http, socks, etc.)
-        type_layout = QHBoxLayout()
-        type_layout.addWidget(QLabel("Type:"))
-        self.proxy_type_input = QLineEdit()
-        self.proxy_type_input.setText("http")
-        self.proxy_type_input.setToolTip("Proxy type (http, socks5, etc.)")
-        type_layout.addWidget(self.proxy_type_input)
-        layout.addLayout(type_layout)
+        # Proxy details
+        details_layout = QHBoxLayout()
         
-        # Host
-        host_layout = QHBoxLayout()
-        host_layout.addWidget(QLabel("Host:"))
+        self.proxy_type_input = QLineEdit("http")
+        details_layout.addWidget(self.proxy_type_input)
+        details_layout.addWidget(QLabel("://"))
+        
         self.proxy_host_input = QLineEdit()
         self.proxy_host_input.setPlaceholderText("proxy.example.com")
-        host_layout.addWidget(self.proxy_host_input)
-        layout.addLayout(host_layout)
+        details_layout.addWidget(self.proxy_host_input, 1)  # Stretch
         
-        # Port
-        port_layout = QHBoxLayout()
-        port_layout.addWidget(QLabel("Port:"))
+        details_layout.addWidget(QLabel(":"))
+        
         self.proxy_port_input = QSpinBox()
-        self.proxy_port_input.setMinimum(1)
-        self.proxy_port_input.setMaximum(65535)
+        self.proxy_port_input.setRange(1, 65535)
         self.proxy_port_input.setValue(8080)
-        port_layout.addWidget(self.proxy_port_input)
-        layout.addLayout(port_layout)
+        details_layout.addWidget(self.proxy_port_input)
+        
+        layout.addLayout(details_layout)
         
         # Apply button
         apply_btn = QPushButton("Apply Proxy Settings")
         apply_btn.clicked.connect(self.on_apply_proxy)
         layout.addWidget(apply_btn)
         
-        # Status
-        self.proxy_status = QLabel("Status: Disabled")
+        # Status label
+        self.proxy_status = QLabel("Status: Not configured")
         layout.addWidget(self.proxy_status)
         
-        # Initially disable proxy inputs
-        self._set_proxy_inputs_enabled(False)
-        
-        group.setLayout(layout)
         return group
-    
+
     def create_app_settings_section(self):
-        """Create app settings controls"""
         group = QGroupBox("App Settings")
-        layout = QVBoxLayout()
-        
-        # Settings path
-        self.settings_path_label = QLabel("settings.json: (unknown)")
-        layout.addWidget(self.settings_path_label)
-        
-        # Edit settings button
-        edit_settings_btn = QPushButton("Edit App Settings")
-        edit_settings_btn.clicked.connect(self.on_edit_settings)
-        layout.addWidget(edit_settings_btn)
-        
-        # Update path label
-        self._refresh_settings_path_label()
-        
-        group.setLayout(layout)
+        v = QVBoxLayout(group)
+
+        # full path to settings.json
+        self.settings_path_label = QLabel()
+        self.settings_path_label.setWordWrap(True)
+        self.settings_path_label.setStyleSheet("color: gray; font-size: 10px;")
+        v.addWidget(self.settings_path_label)
+
+        row = QHBoxLayout()
+        edit_btn = QPushButton("Edit settings…")
+        edit_btn.clicked.connect(self.on_edit_settings)
+        row.addWidget(edit_btn)
+        row.addStretch(1)
+        v.addLayout(row)
+
+        # fill path
+        try:
+            p = self.settings_manager.settings_path
+            self.settings_path_label.setText(f"settings.json: {str(p.resolve())}")
+        except Exception:
+            self.settings_path_label.setText("settings.json: (unknown)")
+
         return group
+
+    # --- Navigation actions --------------------------------------------------------
     
-    # --- Navigation actions --------------------------------------------------
     def on_navigate(self):
         """Navigate to URL in current tab."""
-        if not self.browser_window:
-            self.update_status("Browser window not available", level="WARNING")
-            return
+        try:
+            if not self.browser_window:
+                self.update_status("No browser window connected", "WARNING")
+                return
+                
+            url = self.url_input.text().strip()
+            if not url:
+                return
+                
+            self.browser_window.tab_manager.navigate_current(url)
+            self.log_command(f"Navigating to: {url}")
             
-        url = self.url_input.text().strip()
-        if not url:
-            self.update_status("Please enter a URL", level="WARNING")
-            return
-            
-        # Add http:// if no scheme
-        if not url.startswith(("http://", "https://", "file://", "about:")):
-            url = "https://" + url
-        
-        # Find current tab
-        tab_manager = getattr(self.browser_window, "tab_manager", None)
-        if not tab_manager:
-            self.update_status("Tab manager not available", level="ERROR")
-            return
-            
-        tab_manager.navigate_current(url)
-        self.log_command(f"Navigate to: {url}")
-    
+        except Exception as e:
+            self.update_status(f"Navigation failed: {e}", "ERROR")
+
     def on_back(self):
-        """Navigate back in current tab."""
-        if not self.browser_window:
-            self.update_status("Browser window not available", level="WARNING")
-            return
-            
-        self.browser_window.back()
-        self.log_command("Back")
-    
+        try:
+            if not self.browser_window:
+                return
+                
+            # Get current tab's browser view
+            tab = self.browser_window.tab_manager.get_current_tab()
+            if tab and tab.view:
+                tab.view.back()
+                self.log_command("Back")
+                
+        except Exception as e:
+            self.update_status(f"Back failed: {e}", "ERROR")
+
     def on_forward(self):
-        """Navigate forward in current tab."""
-        if not self.browser_window:
-            self.update_status("Browser window not available", level="WARNING")
-            return
-            
-        self.browser_window.forward()
-        self.log_command("Forward")
-    
+        try:
+            if not self.browser_window:
+                return
+                
+            # Get current tab's browser view
+            tab = self.browser_window.tab_manager.get_current_tab()
+            if tab and tab.view:
+                tab.view.forward()
+                self.log_command("Forward")
+                
+        except Exception as e:
+            self.update_status(f"Forward failed: {e}", "ERROR")
+
     def on_reload(self):
-        """Reload current tab."""
-        if not self.browser_window:
-            self.update_status("Browser window not available", level="WARNING")
-            return
-            
-        self.browser_window.reload()
-        self.log_command("Reload")
+        try:
+            if not self.browser_window:
+                return
+                
+            # Get current tab's browser view
+            tab = self.browser_window.tab_manager.get_current_tab()
+            if tab and tab.view:
+                tab.view.reload()
+                self.log_command("Reload")
+                
+        except Exception as e:
+            self.update_status(f"Reload failed: {e}", "ERROR")
+    
+    # --- Quick actions -------------------------------------------------------------
     
     def on_new_tab(self):
-        """Create a new tab."""
-        if not self.browser_window:
-            self.update_status("Browser window not available", level="WARNING")
-            return
-            
-        tab_manager = getattr(self.browser_window, "tab_manager", None)
-        if not tab_manager:
-            self.update_status("Tab manager not available", level="ERROR")
-            return
-            
-        tab_manager.new_tab(switch=True)
-        self.log_command("New tab")
-    
+        try:
+            if not self.browser_window:
+                return
+                
+            # Create new tab
+            self.browser_window.tab_manager.new_tab()
+            self.log_command("New Tab")
+                
+        except Exception as e:
+            self.update_status(f"New tab failed: {e}", "ERROR")
+
     def on_open_dev_tools(self):
-        """Open developer tools for current tab."""
         try:
             if not self.browser_window:
                 return
@@ -714,14 +713,12 @@ class BrowserControllerWindow(QMainWindow):
             if tab and tab.view and hasattr(tab.view.page(), "triggerAction"):
                 from PySide6.QtWebEngineCore import QWebEnginePage
                 tab.view.page().triggerAction(QWebEnginePage.InspectElement)
-                self.log_command("Open Developer Tools")
-                
                 self.update_status("Developer tools opened")
             else:
                 self.update_status("Cannot open developer tools - no active tab", level="WARNING")
         except Exception as e:
-            self.update_status(f"Developer tools failed: {e}", "ERROR")
-            
+            self.update_status(f"Failed to open dev tools: {e}", level="ERROR")
+
     def on_save_html(self):
         """Save the HTML of the current page"""
         if self._resolve_main_window() and hasattr(self.browser_ops, 'save_html'):
@@ -733,7 +730,12 @@ class BrowserControllerWindow(QMainWindow):
                 self.update_status("No active tab found", level="WARNING")
         else:
             self.update_status("Browser window not available", level="WARNING")
-    
+                tab.view.page().triggerAction(QWebEnginePage.WebAction.InspectElement)
+                self.log_command("Open Developer Tools")
+                
+        except Exception as e:
+            self.update_status(f"Developer tools failed: {e}", "ERROR")
+
     def on_toggle_element(self):
         try:
             if not self.browser_window:
@@ -751,175 +753,246 @@ class BrowserControllerWindow(QMainWindow):
                     } else {
                         el.style.display = 'none';
                     }
-                    return "Toggled element visibility: " + (el.style.display || "visible");
+                    return "Toggled element visibility";
                 } else {
-                    return "No div elements found";
+                    return "No elements found to toggle";
                 }
             })();
             """
             
+            # Execute on current tab
+            tab = self.browser_window.tab_manager.get_current_tab()
+            if tab and tab.view and tab.view.page():
+                tab.view.page().runJavaScript(script, 0, self._handle_script_result)
+                self.log_command("Toggle Element")
+                
+        except Exception as e:
+            self.update_status(f"Toggle failed: {e}", "ERROR")
+    
+    # --- Auto-reload ---------------------------------------------------------------
+    
+    def on_auto_reload_changed(self, state):
+        """Handle auto-reload checkbox change."""
+        self.auto_reload_enabled = (state == Qt.Checked)
+        
+        if not self.auto_reload_enabled and self.auto_reload_timer.isActive():
+            self.auto_reload_timer.stop()
+            self.reload_btn.setText("Start Auto-Reload")
+            
+    def on_interval_changed(self, value):
+        """Handle interval change."""
+        if self.auto_reload_timer.isActive():
+            self.auto_reload_timer.setInterval(value * 1000)
+            
+    def on_toggle_auto_reload(self):
+        """Start/stop auto-reload."""
+        if self.auto_reload_timer.isActive():
+            self.auto_reload_timer.stop()
+            self.reload_btn.setText("Start Auto-Reload")
+            self.log_command("Auto-reload stopped")
+        else:
+            if not self.auto_reload_enabled:
+                self.auto_reload_cb.setChecked(True)
+                
+            interval = self.reload_interval.value() * 1000  # convert to ms
+            self.auto_reload_timer.setInterval(interval)
+            self.auto_reload_timer.start()
+            self.reload_btn.setText("Stop Auto-Reload")
+            self.log_command(f"Auto-reload started ({self.reload_interval.value()} seconds)")
+            
+    def on_auto_reload_timeout(self):
+        """Handle auto-reload timer timeout."""
+        try:
+            if not self.browser_window:
+                return
+                
             # Get current tab's browser view
             tab = self.browser_window.tab_manager.get_current_tab()
             if tab and tab.view:
-                tab.view.page().runJavaScript(script, self._handle_script_result)
-                self.log_command("Toggle element visibility")
-                self.update_status("Toggling element...")
-            else:
-                self.update_status("No active tab", level="WARNING")
+                tab.view.reload()
+                self.log_command("Auto-reload triggered")
                 
         except Exception as e:
-            self.update_status(f"Toggle element failed: {e}", level="ERROR")
+            self.update_status(f"Auto-reload failed: {e}", "ERROR")
     
-    # --- Auto reload handling ------------------------------------------------
-    def on_auto_reload_toggle(self, state):
-        self.auto_reload_enabled = (state == Qt.Checked)
-        self._update_auto_reload_state()
+    # --- Screenshots ---------------------------------------------------------------
     
-    def on_interval_changed(self, value):
-        if self.auto_reload_enabled:
-            # Update timer with new interval
-            self._update_auto_reload_state()
-    
-    def _update_auto_reload_state(self):
-        # Stop any existing timer
-        if self.auto_reload_timer.isActive():
-            self.auto_reload_timer.stop()
-        
-        if self.auto_reload_enabled:
-            interval_ms = self.reload_interval.value() * 1000
-            self.auto_reload_timer.start(interval_ms)
-            self.reload_status.setText(f"Auto reload: Every {self.reload_interval.value()} seconds")
-        else:
-            self.reload_status.setText("Auto reload: Disabled")
-    
-    def on_auto_reload_timeout(self):
-        """Handle auto-reload timer timeout."""
-        if self.browser_window:
-            # Only reload if window is available
-            self.browser_window.reload()
-            self.log_command(f"Auto reload (interval: {self.reload_interval.value()}s)")
-    
-    # --- Screenshot functions ------------------------------------------------
-    def on_capture_visible(self):
-        """Capture visible portion of page."""
-        if not self.browser_window:
-            self.update_status("Browser window not available", level="WARNING")
-            return
+    def on_take_screenshot(self):
+        """Take a screenshot of the current tab."""
+        try:
+            if not self.browser_window:
+                return
+                
+            current = self.browser_window.tab_manager.get_current_tab()
+            if not current:
+                self.update_status("No active tab", "WARNING")
+                return
+                
+            # Use the browser_ops helper if available
+            if hasattr(self, 'browser_ops') and hasattr(self.browser_ops, 'save_screenshot'):
+                self.browser_ops.save_screenshot(tab=current)
+                self.log_command("Screenshot captured")
+            else:
+                # Fallback to browser window method
+                if hasattr(self.browser_window, 'save_current_tab_screenshot'):
+                    self.browser_window.save_current_tab_screenshot()
+                    self.log_command("Screenshot captured")
+                
+        except Exception as e:
+            self.update_status(f"Screenshot failed: {e}", "ERROR")
 
-        # Use browser_ops to handle screenshot
-        current_tab = self._get_current_tab()
-        if current_tab:
-            self.browser_ops.save_screenshot(tab=current_tab)
-            self.update_status("Capturing visible area...")
-            self.log_command("Capture visible screenshot")
-        else:
-            self.update_status("No active tab", level="WARNING")
+    def on_take_full_page_screenshot(self):
+        """Take a full-page screenshot."""
+        try:
+            if not self.browser_window:
+                return
+                
+            current = self.browser_window.tab_manager.get_current_tab()
+            if not current:
+                self.update_status("No active tab", "WARNING")
+                return
+                
+            # Use the browser_ops helper if available
+            if hasattr(self, 'browser_ops') and hasattr(self.browser_ops, 'save_full_page_screenshot'):
+                self.browser_ops.save_full_page_screenshot(tab=current)
+                self.log_command("Full-page screenshot started")
+            else:
+                # Fallback to browser window method
+                if hasattr(self.browser_window, 'save_full_page_screenshot'):
+                    self.browser_window.save_full_page_screenshot()
+                    self.log_command("Full-page screenshot started")
+                
+        except Exception as e:
+            self.update_status(f"Full-page screenshot failed: {e}", "ERROR")
     
-    def on_capture_full_page(self):
-        """Capture full scrollable page."""
-        if not self.browser_window:
-            self.update_status("Browser window not available", level="WARNING")
-            return
-            
-        # Use browser_ops to handle full page screenshot
-        current_tab = self._get_current_tab()
-        if current_tab:
-            self.browser_ops.save_full_page_screenshot(tab=current_tab)
-            self.update_status("Capturing full page (may take a moment)...")
-            self.log_command("Capture full page screenshot")
-        else:
-            self.update_status("No active tab", level="WARNING")
+    # --- Scripting -----------------------------------------------------------------
     
-    # --- Scripting functions -------------------------------------------------
-    def on_execute_script(self):
-        """Execute JavaScript in current tab."""
-        if not self.browser_window:
-            self.update_status("Browser window not available", level="WARNING")
-            return
+    def on_run_script(self):
+        """Execute JavaScript in the current tab."""
+        try:
+            if not self.browser_window:
+                self.update_status("No browser window connected", "WARNING")
+                return
+                
+            # Get script content
+            script = self.script_editor.toPlainText().strip()
+            if not script:
+                self.update_status("No script to run", "WARNING")
+                return
+                
+            # Get current tab
+            tab = self.browser_window.tab_manager.get_current_tab()
+            if not tab or not tab.view or not tab.view.page():
+                self.update_status("No active tab", "WARNING")
+                return
+                
+            # Execute script
+            tab.view.page().runJavaScript(script, 0, self._handle_script_result)
+            self.log_command("Script executed")
+                
+        except Exception as e:
+            self.update_status(f"Script execution failed: {e}", "ERROR")
             
-        script = self.script_input.toPlainText().strip()
-        if not script:
-            self.update_status("Please enter a JavaScript script", level="WARNING")
-            return
-            
-        # Get current tab's browser view
-        tab = self.browser_window.tab_manager.get_current_tab()
-        if tab and tab.view:
-            # Execute the script
-            tab.view.page().runJavaScript(script, self._handle_script_result)
-            self.log_command("Execute script")
-            self.update_status("Executing script...")
-        else:
-            self.update_status("No active tab", level="WARNING")
-    
     def _handle_script_result(self, result):
         """Handle JavaScript execution result."""
-        # Convert result to string
-        if result is None:
-            result_text = "undefined (or no return value)"
-        elif isinstance(result, (dict, list)):
-            import json
+        if result is not None:
+            self.update_status(f"Script result: {str(result)}")
+            
+    def on_save_script(self):
+        """Save script to file"""
+        from PySide6.QtWidgets import QFileDialog
+        
+        if not self.settings_manager:
+            return
+            
+        scripts_dir = self.settings_manager.config_dir / "scripts"
+        scripts_dir.mkdir(parents=True, exist_ok=True)
+        
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Script",
+            str(scripts_dir / "script.txt"),
+            "Script Files (*.txt);;All Files (*.*)"
+        )
+        
+        if filename:
             try:
-                result_text = json.dumps(result, indent=2)
-            except Exception:
-                result_text = str(result)
+                script_text = self.script_editor.toPlainText()
+                with open(filename, 'w', encoding='utf-8') as f:
+                    f.write(script_text)
+                self.update_status(f"Script saved: {filename}")
+                self.log_command(f"Script saved to: {filename}")
+            except Exception as e:
+                self.update_status(f"Failed to save script: {e}")
+                
+    def on_load_script(self):
+        """Load script from file"""
+        from PySide6.QtWidgets import QFileDialog
+        
+        if not self.settings_manager:
+            return
+            
+        scripts_dir = self.settings_manager.config_dir / "scripts"
+        scripts_dir.mkdir(parents=True, exist_ok=True)
+        
+        filename, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load Script",
+            str(scripts_dir),
+            "Script Files (*.txt);;All Files (*.*)"
+        )
+        
+        if filename:
+            try:
+                with open(filename, 'r', encoding='utf-8') as f:
+                    script_text = f.read()
+                self.script_editor.setPlainText(script_text)
+                self.update_status(f"Script loaded: {filename}")
+                self.log_command(f"Script loaded from: {filename}")
+            except Exception as e:
+                self.update_status(f"Failed to load script: {e}")
+    
+    # --- User Agent ----------------------------------------------------------------
+    
+    def on_preset_user_agent(self, preset):
+        """Set a preset user agent."""
+        if preset == "chrome":
+            ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        elif preset == "firefox":
+            ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0"
+        elif preset == "mobile":
+            ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1"
         else:
-            result_text = str(result)
+            return
             
-        # Update result display
-        self.script_result.setPlainText(result_text)
-        self.update_status("Script executed")
-        
-    # --- User Agent functions ------------------------------------------------
+        self.user_agent_input.setText(ua)
+        self.on_apply_user_agent()
+    
     def on_apply_user_agent(self):
-        """Apply custom user agent."""
-        if not self.settings_manager:
-            self.update_status("Settings manager not available", level="WARNING")
-            return
+        """Apply the custom user agent."""
+        try:
+            if not self.settings_manager:
+                self.update_status("No settings manager available", "WARNING")
+                return
+                
+            user_agent = self.user_agent_input.text().strip()
             
-        ua = self.user_agent_input.text().strip()
-        if not ua:
-            self.update_status("Please enter a User-Agent string", level="WARNING")
-            return
+            # Save to settings
+            self.settings_manager.set("user_agent", user_agent)
             
-        # Save to settings
-        self.settings_manager.set("user_agent", ua)
-        self.settings_manager.save()
-        
-        # Apply to WebEngine (usually requires restart)
-        self.update_status("User Agent set (restart browser to apply)")
-        self.ua_status.setText("Status: Custom UA set (restart needed)")
-        self.log_command(f"Set User-Agent: {ua}")
+            # Apply to browser
+            if hasattr(self.settings_manager, "web_profile"):
+                self.settings_manager.web_profile.setHttpUserAgent(user_agent)
+                
+            self.update_status(f"User agent {'updated' if user_agent else 'reset to default'}")
+            self.log_command(f"User agent {'updated' if user_agent else 'reset to default'}")
+                
+        except Exception as e:
+            self.update_status(f"Failed to apply user agent: {e}", "ERROR")
     
-    def on_reset_user_agent(self):
-        """Reset user agent to default."""
-        if not self.settings_manager:
-            self.update_status("Settings manager not available", level="WARNING")
-            return
-            
-        # Remove from settings
-        self.settings_manager.set("user_agent", "")
-        self.settings_manager.save()
-        
-        # Clear input
-        self.user_agent_input.clear()
-        
-        self.update_status("User Agent reset to default (restart browser to apply)")
-        self.ua_status.setText("Status: Using default")
-        self.log_command("Reset User-Agent to default")
+    # --- Proxy Settings ------------------------------------------------------------
     
-    def on_ua_preset_selected(self, index):
-        """Handle User-Agent preset selection."""
-        if index < 0:
-            return
-            
-        ua = self.ua_presets.currentData()
-        if ua:
-            self.user_agent_input.setText(ua)
-    
-    # --- Proxy functions -----------------------------------------------------
     def _set_proxy_inputs_enabled(self, enabled: bool):
-        """Enable/disable proxy input fields."""
         self.proxy_host_input.setEnabled(enabled)
         self.proxy_port_input.setEnabled(enabled)
         self.proxy_type_input.setEnabled(enabled)

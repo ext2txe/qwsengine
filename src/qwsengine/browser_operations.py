@@ -466,13 +466,15 @@ class BrowserOperations:
             if not ok:
                 self._fps_fail("Failed to save stitched image.")
             else:
+                # Scroll back to top after full page capture
+                if self._fps_tab and hasattr(self._fps_tab, "view") and self._fps_tab.view:
+                    self._fps_tab.view.page().runJavaScript("window.scrollTo(0, 0);")
                 self.status_callback(f"Saved Full Page → {self._fps_target}", level="INFO")
                 self._log_system_event("browser_operations", "Full page screenshot saved", str(self._fps_target))
         except Exception as e:
             self._fps_fail(f"Save error: {e}")
         finally:
             self._fps_reset()
-    
     def _fps_fail(self, msg: str):
         """Handle full-page screenshot failure"""
         self.status_callback(msg, level="ERROR")

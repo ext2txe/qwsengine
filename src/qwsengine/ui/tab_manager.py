@@ -125,12 +125,12 @@ class TabManager:
         """
         view = tab.view
         
-        # URL changed - explicit lambda to pass the sender along with URL
+        # URL changed - pass sender explicitly with the signal
         view.urlChanged.connect(
             lambda qurl: self._on_browser_url_changed(view, qurl)
         )
         
-        # Title changed - explicit lambda to pass the sender along with title
+        # Title changed - pass sender explicitly with the signal
         view.titleChanged.connect(
             lambda title: self._on_browser_title_changed(view, title)
         )
