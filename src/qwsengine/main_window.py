@@ -469,10 +469,11 @@ class BrowserWindow(QMainWindow):
             self.urlbar.setText(qurl.toString())
 
     def _on_urlbar_return_pressed(self):
-        text = self.urlbar.text()
-        if not text:
-            return
-        self.navigate_current(text)
+        urlbar = self.toolbar_builder.urlbar
+        if urlbar:
+            text = urlbar.text().strip()
+            if text:
+                self.navigate_current(text)
 
 
     # Optional hooks; safe no-ops if you don't override them elsewhere
@@ -480,7 +481,25 @@ class BrowserWindow(QMainWindow):
         pass
 
     def on_tab_load_finished(self):  # pragma: no cover
-        pass
+        """Handle tab load completion, updating URL and title"""
+        # Get current tab
+        tab = self.tab_manager.get_current_tab()
+        if not tab:
+            return
+            
+        # Update URL bar with current URL
+        current_url = tab.view.url()
+        if hasattr(self.toolbar_builder, "urlbar") and self.toolbar_builder.urlbar:
+            self.toolbar_builder.urlbar.setText(current_url.toString())
+            
+        # Update tab title if available
+        current_title = tab.view.title()
+        if current_title:
+            index = self.tabs.currentIndex()
+            if index >= 0:
+                # Truncate long titles
+                short_title = current_title[:20] + "..." if len(current_title) > 20 else current_title
+                self.tabs.setTabText(index, short_title)
 
     def _on_url_changed(self, qurl: QUrl, tab: QWidget):
         # keep it quiet if you don't need anything here yet

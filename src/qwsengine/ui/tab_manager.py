@@ -1,6 +1,6 @@
 # ui/tab_manager.py
 from PySide6.QtWidgets import QWidget, QTabWidget
-from PySide6.QtCore import QUrl, QTimer
+from PySide6.QtCore import QUrl, QTimer, Qt
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineProfile
 from typing import TYPE_CHECKING, Optional, Union
@@ -125,14 +125,14 @@ class TabManager:
         """
         view = tab.view
         
-        # URL changed
+        # URL changed - explicit lambda to pass the sender along with URL
         view.urlChanged.connect(
-            lambda qurl: self._on_browser_url_changed(qurl)
+            lambda qurl: self._on_browser_url_changed(view, qurl)
         )
         
-        # Title changed
+        # Title changed - explicit lambda to pass the sender along with title
         view.titleChanged.connect(
-            lambda title: self._on_browser_title_changed(title)
+            lambda title: self._on_browser_title_changed(view, title)
         )
         
         # Load progress
@@ -165,9 +165,11 @@ class TabManager:
         if view and hasattr(view, 'load'):
             view.load(qurl)
             self.window._log(f"Loaded {qurl.toString()} in tab")
-
-            # ADD THIS: Update URL bar when loading
-            self._sync_urlbar_with_tab(qurl)
+            
+            # Update URL bar when loading - important to update immediately
+            current_tab = self.get_current_tab()
+            if current_tab and current_tab == tab:
+                self._sync_urlbar_with_tab(qurl)
 
         elif retries > 0:
             # Tab might not be fully initialized, retry
@@ -295,40 +297,69 @@ class TabManager:
         Args:
             qurl: URL to display
         """
-        # Update in toolbar's URL bar
-        if hasattr(self.window, 'urlbar') and self.window.urlbar:
-            self.window.urlbar.setText(qurl.toString())
+        # Update URL in toolbar's URL bar
+        if hasattr(self.window.toolbar_builder, 'urlbar') and self.window.toolbar_builder.urlbar:
+            self.window.toolbar_builder.urlbar.setText(qurl.toString())
+            self.window._log(f"Updated URL bar to: {qurl.toString()}")
         
-        # Also update in old url_edit if it exists (backward compatibility)
-        if hasattr(self.window, 'url_edit') and self.window.url_edit:
-            self.window.url_edit.setText(qurl.toString())
+        # Update in controller window's URL field if available
+        self._update_controller_url(qurl.toString())
     
-    def _on_browser_url_changed(self, qurl: QUrl):
+    def _update_controller_url(self, url_text: str):
+        """
+        Update URL field in controller window if available.
+        
+        Args:
+            url_text: URL string to display
+        """
+        from PySide6.QtWidgets import QApplication
+        
+        # Find controller window
+        for widget in QApplication.topLevelWidgets():
+            if widget.__class__.__name__ == "BrowserControllerWindow":
+                # Update URL field if it exists
+                if hasattr(widget, 'url_input') and widget.url_input:
+                    widget.url_input.setText(url_text)
+                break
+    
+    def _on_browser_url_changed(self, sender: QWebEngineView, qurl: QUrl):
         """
         Handle URL change in any tab.
         
         Args:
+            sender: Web view that triggered the signal
             qurl: New URL
         """
-        # Update URL bar if this is the current tab
-        current = self.get_current_tab()
-        if current and current.view and current.view.url() == qurl:
-            self._sync_urlbar_with_tab(qurl)
+        # Find which tab this web view belongs to
+        for i in range(self.tabs.count()):
+            tab = self.tabs.widget(i)
+            if tab and tab.view == sender:
+                # If this is the current tab, update URL bar
+                if i == self.tabs.currentIndex():
+                    self._sync_urlbar_with_tab(qurl)
+                break
     
-    def _on_browser_title_changed(self, title: str):
+    def _on_browser_title_changed(self, sender: QWebEngineView, title: str):
         """
         Handle title change in any tab.
         
         Args:
+            sender: Web view that triggered the signal
             title: New page title
         """
-        # Find which tab this title belongs to
-        current_index = self.tabs.currentIndex()
-        if current_index >= 0:
-            # Truncate long titles
-            short_title = title[:20] + "..." if len(title) > 20 else title
-            if short_title:  # Only update if non-empty
-                self.tabs.setTabText(current_index, short_title)
+        # Find which tab this web view belongs to
+        for i in range(self.tabs.count()):
+            tab = self.tabs.widget(i)
+            if tab and tab.view == sender:
+                # Truncate long titles
+                short_title = title[:20] + "..." if len(title) > 20 else title
+                if not short_title:
+                    short_title = "Untitled"
+                
+                # Update tab title
+                self.tabs.setTabText(i, short_title)
+                self.window._log(f"Updated title for tab {i}: {short_title}")
+                break
     
     def _handle_new_window_request(self) -> QWebEngineView:
         """
@@ -338,7 +369,7 @@ class TabManager:
             WebView for the new tab
         """
         # Create tab in background
-        new_tab = self._new_tab(switch=False, background=True)
+        new_tab = self._new_tab(switch=True, background=False)
         self.window._log("Created new tab for popup/new window")
         return new_tab.view
     
