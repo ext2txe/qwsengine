@@ -44,7 +44,7 @@ class SettingsManager:
 
         # ----- Defaults (EXACTLY as provided) ------------------------------
         self.default_settings: Dict[str, Any] = {
-            "start_url": "https://codaland.com/ipcheck.php",
+            "start_url": "https://codaland.com/ipdefault", #check.php",
             "window_width": 1024,
             "window_height": 768,
             "logging_enabled": True,
@@ -240,6 +240,8 @@ class SettingsManager:
     def save_settings(self) -> bool:
         """Persist settings atomically; verify; return True on success."""
         try:
+            url = self.settings['start_url']
+            self.log_info("Settings_Manager", url)
             SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
             tmp_path = SETTINGS_PATH.with_suffix(".tmp")
 
@@ -509,6 +511,7 @@ class SettingsManager:
         k = self._normalize_key(key)
         self.settings[k] = value
         if persist:
+
             self.save_settings()
 
     def set_user_agent(self, ua: str) -> bool:

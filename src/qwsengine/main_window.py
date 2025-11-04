@@ -803,7 +803,8 @@ class BrowserWindow(QMainWindow):
             state_b64 = self._qba_to_b64(self.saveState())
             self.settings_manager.set("window_geometry_b64", geom_b64)
             self.settings_manager.set("window_state_b64", state_b64)
-            self.settings_manager.save()
+            url = self.settings_manager.settings['start_url']
+            #self.settings_manager.save()
             self.settings_manager.log("[SYSTEM] Window geometry/state saved cleanly", "SYSTEM")
         except Exception as e:
             self.settings_manager.log_error("main_window", f"Failed to save geometry/state: {e}")

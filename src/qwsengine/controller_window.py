@@ -145,19 +145,40 @@ class BrowserControllerWindow(QMainWindow):
         try:
             bw = self._resolve_main_window()
             if bw:
+                url1 = bw.settings_manager.get('start_url')
+                url2 = self.settings_manager.get('start_url')
+                if url1 != url2:
+                    bw.settings_manager.set('start_url',url2 )
                 # Avoid re-entrancy issues: close on next tick
                 QTimer.singleShot(0, bw.close)
+                QApplication.processEvents()
+                url2 = self.settings_manager.get('start_url')
+
         except Exception:
             pass
 
         # Log closure
         try:
             if self.settings_manager:
+                _save_settings()
                 self.settings_manager.log_system_event("controller", "Controller window closed")
+            else:
+                pass
         except Exception:
             pass
 
         super().closeEvent(event)
+
+    
+    def _save_settings(self):
+
+        urlInSettings = self.settings_manager['start_url']
+        urlInForm = self.start_url_input.text
+        if (urlInForm != urlInSettings):
+            # we need to fix something
+            pass
+        pass
+
 
     def _resolve_main_window(self):
         """Return the live BrowserWindow instance, even if self.browser_window wasn't set."""
@@ -218,6 +239,8 @@ class BrowserControllerWindow(QMainWindow):
         controls_layout.addWidget(self.create_quick_actions_section())
         controls_layout.addWidget(self.create_auto_reload_section())
         controls_layout.addWidget(self.create_screenshot_section())
+        controls_layout.addWidget(self.create_save_page_images_section())
+        controls_layout.addWidget(self.create_open_devtools_section())
         controls_layout.addWidget(self.create_log_section())
         controls_layout.addStretch(1)
         self.tab_widget.addTab(controls_tab, "Controls")
@@ -318,7 +341,10 @@ class BrowserControllerWindow(QMainWindow):
         start_url_layout = QHBoxLayout()
         start_url_layout.addWidget(QLabel("Start URL:"))
         self.start_url_input = QLineEdit()
-        self.start_url_input.setText("https://www.google.com")
+        if self.settings_manager:
+            self.start_url_input.setText(self.settings_manager.get("starturl", "https://www.google.com"))
+        else:
+            self.start_url_input.setText("https://www.google.com")
         self.start_url_input.returnPressed.connect(self._on_start_url_changed)
         start_url_layout.addWidget(self.start_url_input)
         layout.addLayout(start_url_layout)
@@ -341,8 +367,42 @@ class BrowserControllerWindow(QMainWindow):
             
         url = self.start_url_input.text().strip()
         self.settings_manager.set("start_url", url)
-        self.settings_manager.save()
+        # Fixed: Add save_settings call here
+        self.settings_manager.save_settings()
         self.update_status(f"Start URL set to: {url}")
+        # Add logging
+        self.log_command(f"Start URL changed to: {url}")
+
+    def on_open_dev_tools(self):
+        """Open developer tools for current tab."""
+        try:
+            if not self.browser_window:
+                return
+                
+            # Get current tab's browser view
+            tab = self._get_current_tab()
+            if tab and hasattr(tab, "view") and tab.view and hasattr(tab.view.page(), "triggerAction"):
+                from PySide6.QtWebEngineCore import QWebEnginePage
+                tab.view.page().triggerAction(QWebEnginePage.InspectElement)
+                self.log_command("Open Developer Tools")
+                
+                self.update_status("Developer tools opened")
+            else:
+                self.update_status("Cannot open developer tools - no active tab", level="WARNING")
+        except Exception as e:
+            self.update_status(f"Developer tools failed: {e}", "ERROR")
+
+    def on_extract_images(self):
+        """Extract all images from the current page."""
+        if self._resolve_main_window(): 
+            current_tab = self._get_current_tab()
+            if current_tab:
+                self.browser_ops.extract_images(tab=current_tab)
+                self.log_command("Extract images action executed")
+            else:
+                self.update_status("No active tab", level="WARNING")
+        else:
+            self.update_status("Browser window not available", level="ERROR")
 
     def create_navigation_section(self):
         """Create navigation controls"""
@@ -472,6 +532,32 @@ class BrowserControllerWindow(QMainWindow):
         group.setLayout(layout)
         return group
     
+    def create_save_page_images_section(self):
+        """Create Extract Page Images"""
+        group = QGroupBox("Extract Page Images")
+        layout = QVBoxLayout()
+
+        # create button
+        saveimages_btn = QPushButton("Extract Images")
+        saveimages_btn.clicked.connect(self.on_extract_images)
+        layout.addWidget(saveimages_btn)
+
+        group.setLayout(layout)
+        return group   
+
+    def create_open_devtools_section(self):
+        """Create DevTools button"""
+        group = QGroupBox("DevTools")
+        layout = QVBoxLayout()
+
+        # create button
+        devtools_btn = QPushButton("Open DevTools window")
+        devtools_btn.clicked.connect(self.on_open_dev_tools)
+        layout.addWidget(devtools_btn)
+
+        group.setLayout(layout)
+        return group    
+
     def create_log_section(self):
         """Create log output section"""
         group = QGroupBox("Command Log")
@@ -702,25 +788,97 @@ class BrowserControllerWindow(QMainWindow):
             
         tab_manager.new_tab(switch=True)
         self.log_command("New tab")
-    
+        
+    def on_extract_images(self):
+        """Extract all images from the current page."""
+        if self._resolve_main_window() and hasattr(self.browser_ops, 'extract_images'):
+            current_tab = self._get_current_tab()
+            if current_tab:
+                self.browser_ops.extract_images(tab=current_tab)
+                self.log_command("Extract images action executed")
+            else:
+                self.update_status("No active tab", level="WARNING")
+        else:
+            self.update_status("Image extraction unavailable", level="ERROR")
+
     def on_open_dev_tools(self):
         """Open developer tools for current tab."""
         try:
             if not self.browser_window:
                 return
-                
+                    
             # Get current tab's browser view
             tab = self.browser_window.tab_manager.get_current_tab()
-            if tab and tab.view and hasattr(tab.view.page(), "triggerAction"):
-                from PySide6.QtWebEngineCore import QWebEnginePage
-                tab.view.page().triggerAction(QWebEnginePage.InspectElement)
-                self.log_command("Open Developer Tools")
+            if not tab or not hasattr(tab, "view") or not tab.view:
+                self.update_status("No active tab available", level="WARNING")
+                return
                 
-                self.update_status("Developer tools opened")
-            else:
-                self.update_status("Cannot open developer tools - no active tab", level="WARNING")
+            # Try different methods to open DevTools
+            view = tab.view
+            page = view.page()
+            
+            # # Method 1: Using triggerAction (most common)
+            # if hasattr(page, "triggerAction"):
+            #     from PySide6.QtWebEngineCore import QWebEnginePage
+            #     # Try with WebInspector action first (newer versions)
+            #     try:
+            #         page.triggerAction(QWebEnginePage.WebInspector)
+            #         self.log_command("Open DevTools (WebInspector)")
+            #         self.update_status("Developer tools opened")
+            #         return
+            #     except Exception:
+            #         # Fall back to InspectElement
+            #         try:
+            #             page.triggerAction(QWebEnginePage.InspectElement)
+            #             self.log_command("Open DevTools (InspectElement)")
+            #             self.update_status("Developer tools opened")
+            #             return
+            #         except Exception:
+            #             pass
+            
+            # Method 2: Using settings to enable devtools and F12 key simulation
+            try:
+                # Enable inspector
+                settings = page.settings()
+                settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
+                settings.setAttribute(QWebEngineSettings.WebAttribute.DeveloperExtrasEnabled, True)
+                
+                # Try to simulate F12 key
+                from PySide6.QtCore import Qt
+                from PySide6.QtGui import QKeyEvent
+                key_press = QKeyEvent(QEvent.KeyPress, Qt.Key_F12, Qt.NoModifier)
+                key_release = QKeyEvent(QEvent.KeyRelease, Qt.Key_F12, Qt.NoModifier)
+                
+                # Send key events
+                QApplication.sendEvent(view, key_press)
+                QApplication.sendEvent(view, key_release)
+                
+                self.log_command("Open DevTools (F12)")
+                self.update_status("Developer tools opened (F12)")
+                return
+            except Exception:
+                pass
+            
+            # Method 3: JavaScript method (last resort)
+            try:
+                # Try to open DevTools using JavaScript
+                script = """
+                if (window.open) {
+                    // This only works if DevTools is not already open
+                    window.open('about:blank', '_blank', 'nodeIntegration=1,contextIsolation=0');
+                    console.log('Attempting to open dev tools via JavaScript');
+                }
+                """
+                page.runJavaScript(script)
+                self.log_command("Open DevTools (JavaScript)")
+                self.update_status("Attempted to open developer tools via JavaScript")
+                return
+            except Exception:
+                pass
+            
+            self.update_status("Failed to open developer tools. Try using F12 or right-click -> Inspect", level="WARNING")
         except Exception as e:
-            self.update_status(f"Developer tools failed: {e}", "ERROR")
+            self.update_status(f"Developer tools error: {e}", "ERROR")
             
     def on_save_html(self):
         """Save the HTML of the current page"""
@@ -1038,10 +1196,16 @@ class BrowserControllerWindow(QMainWindow):
                 # Load user agent
                 ua = self.settings_manager.get("user_agent", "")
                 self.user_agent_input.setText(ua)
+
+            # Load start URL
+            if self.settings_manager:
+                start_url = self.settings_manager.get("start_url", "https://www.google.com")
+                self.start_url_input.setText(start_url)
+            
                 
         except Exception as e:
             self.update_status(f"Failed to load settings: {e}", "WARNING")
-    
+
     def update_status(self, message, level="INFO", timeout_ms=5000):
         """Update status label and log."""
         # Update status label
@@ -1094,6 +1258,7 @@ class BrowserControllerWindow(QMainWindow):
             self.settings_path_label.setText("settings.json: (unknown)")
 
     def on_edit_settings(self):
+
         """Open the Settings dialog; refresh UI and path label on save."""
         try:
             if not getattr(self, "settings_manager", None):
@@ -1113,5 +1278,6 @@ class BrowserControllerWindow(QMainWindow):
                 if hasattr(self, "update_status"):
                     self.update_status("Settings unchanged.")
         except Exception as e:
+
             if hasattr(self, "update_status"):
-                self.update_status(f"Failed to open settings dialog: {e}")
+                self.update_status(f"Failed to open settings dialog: {e}")            

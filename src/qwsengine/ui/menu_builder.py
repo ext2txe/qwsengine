@@ -35,7 +35,7 @@ class MenuBuilder:
         
         self._create_file_menu(menubar)
         self._create_view_menu(menubar)
-        self._create_tools_menu(menubar)
+        #self._create_tools_menu(menubar)
         self._create_help_menu(menubar)
         
         return menubar
