@@ -86,7 +86,7 @@ class SettingsManager:
         self.log_manager = None
         if self.settings.get("logging_enabled", True) and LogManager is not None:
             try:
-                self.log_manager = LogManager(self.config_dir)
+                self.log_manager = LogManager(self.config_dir, "qwsEngine")
             except Exception:
                 self.log_manager = None  # don’t crash if logger fails
 
@@ -127,7 +127,6 @@ class SettingsManager:
 
     def extra_headers_per_host(self) -> Dict[str, Dict[str, str]]:
         return dict(self.settings.get("headers_per_host", {}) or {})
-
 
     # ----------------------------------------------------------------------
     # Logging shims (so existing calls work even if LogManager is None)
@@ -216,7 +215,6 @@ class SettingsManager:
             fallback.parent.mkdir(parents=True, exist_ok=True)
             fallback.touch(exist_ok=True)
         return fallback
-
 
     # ----------------------------------------------------------------------
     # Settings IO
@@ -520,7 +518,6 @@ class SettingsManager:
         # apply regardless; failure to apply != failure to save
         self.apply_network_overrides()
         return ok
-
 
     # ----------------------------------------------------------------------
     # Proxy (best-effort for QtWebEngine via Chromium flags)

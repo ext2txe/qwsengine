@@ -39,6 +39,7 @@ from .settings import SettingsManager
 from .settings_dialog import SettingsDialog
 from qwsengine.about_dialog import AboutDialog
 from .browser_operations import BrowserOperations  # NEW IMPORT
+from .log_manager import LogManager
 
 class BrowserWindow(QMainWindow):
     """
@@ -57,6 +58,14 @@ class BrowserWindow(QMainWindow):
         # Wrap provided settings manager (can be None) with a safe shim
         #self.settings_manager = _SafeSettings(settings_manager)
         self.settings_manager = SettingsManager()
+
+        # Initialize log manager
+        self.log_manager = None
+        if self.settings_manager and hasattr(self.settings_manager, "config_dir"):
+            self.log_manager = LogManager(
+                config_dir=self.settings_manager.config_dir,
+                app_name="qwsEngine"
+            )
 
         #from .ui.menu_builder import MenuBuilder
         self.menu_builder = MenuBuilder(self)
@@ -766,7 +775,6 @@ class BrowserWindow(QMainWindow):
             self.show_status(f"Failed to open scripts folder: {e}", level="ERROR")
             self.settings_manager.log_error("main_window", f"Open scripts folder failed: {e}")
 
-
     def _user_agent_from_settings(self) -> str | None:
         get = getattr(self.settings_manager, "get", None)
         if not callable(get):
@@ -786,7 +794,6 @@ class BrowserWindow(QMainWindow):
         ua = self._user_agent_from_settings()
         if ua and profile.httpUserAgent() != ua:
             profile.setHttpUserAgent(ua)
-
 
     # --- Geometry/state (safe JSON via base64) ---------------------------------
     def _qba_to_b64(self, qba: QByteArray) -> str:
@@ -831,7 +838,6 @@ class BrowserWindow(QMainWindow):
                 self.restoreState(self._b64_to_qba(s_b64))
         except Exception as e:
             self.settings_manager.log_error("main_window", f"Failed to restore geometry/state: {e}")
-
 
 # --- Optional manual run for smoke testing -----------------------------------
 if __name__ == "__main__":  # pragma: no cover

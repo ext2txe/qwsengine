@@ -169,7 +169,6 @@ class BrowserControllerWindow(QMainWindow):
 
         super().closeEvent(event)
 
-    
     def _save_settings(self):
 
         urlInSettings = self.settings_manager['start_url']
@@ -178,7 +177,6 @@ class BrowserControllerWindow(QMainWindow):
             # we need to fix something
             pass
         pass
-
 
     def _resolve_main_window(self):
         """Return the live BrowserWindow instance, even if self.browser_window wasn't set."""
