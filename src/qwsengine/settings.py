@@ -11,6 +11,7 @@ from PySide6.QtWebEngineCore import QWebEngineProfile
 
 # Single source of truth for app identity & paths
 from qwsengine.app_info import app_dir, SETTINGS_PATH, CACHE_DIR, DATA_DIR, LOG_DIR
+from .request_interceptor import HeaderInterceptor  # <-- correct name
 
 # Optional imports (don’t crash if not present)
 try:
@@ -36,14 +37,14 @@ class SettingsManager:
 
     def __init__(self) -> None:
         # ----- directories (used by logger & others) -----------------------
-        self.config_dir: Path = app_dir(QStandardPaths.AppConfigLocation)
+        self.config_dir: Path = DATA_DIR # app_dir(QStandardPaths.AppConfigLocation)
         self.settings_path = SETTINGS_PATH
         self.cache_dir: Path  = CACHE_DIR
         self.data_dir: Path   = DATA_DIR
 
         # ----- Defaults (EXACTLY as provided) ------------------------------
         self.default_settings: Dict[str, Any] = {
-            "start_url": "https://codaland.com/ipcheck.php",
+            "start_url": "https://codaland.com/ipdefault", #check.php",
             "window_width": 1024,
             "window_height": 768,
             "logging_enabled": True,
@@ -66,6 +67,9 @@ class SettingsManager:
             "proxy_user": "",
             "proxy_password": "",
 
+            # Add these two new settings here:
+            "auto_launch_browser": True,  # Whether to auto-launch browser on startup
+
             # if accept_language is "", then headers will not be inserted
             "accept_language": "en-US,en;q=0.9",
             "send_dnt": False,
@@ -82,7 +86,7 @@ class SettingsManager:
         self.log_manager = None
         if self.settings.get("logging_enabled", True) and LogManager is not None:
             try:
-                self.log_manager = LogManager(self.config_dir)
+                self.log_manager = LogManager(self.config_dir, "qwsEngine")
             except Exception:
                 self.log_manager = None  # don’t crash if logger fails
 
@@ -123,7 +127,6 @@ class SettingsManager:
 
     def extra_headers_per_host(self) -> Dict[str, Dict[str, str]]:
         return dict(self.settings.get("headers_per_host", {}) or {})
-
 
     # ----------------------------------------------------------------------
     # Logging shims (so existing calls work even if LogManager is None)
@@ -213,7 +216,6 @@ class SettingsManager:
             fallback.touch(exist_ok=True)
         return fallback
 
-
     # ----------------------------------------------------------------------
     # Settings IO
     def _load_settings(self) -> Dict[str, Any]:
@@ -236,6 +238,8 @@ class SettingsManager:
     def save_settings(self) -> bool:
         """Persist settings atomically; verify; return True on success."""
         try:
+            url = self.settings['start_url']
+            self.log_info("Settings_Manager", url)
             SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
             tmp_path = SETTINGS_PATH.with_suffix(".tmp")
 
@@ -505,6 +509,7 @@ class SettingsManager:
         k = self._normalize_key(key)
         self.settings[k] = value
         if persist:
+
             self.save_settings()
 
     def set_user_agent(self, ua: str) -> bool:
@@ -513,7 +518,6 @@ class SettingsManager:
         # apply regardless; failure to apply != failure to save
         self.apply_network_overrides()
         return ok
-
 
     # ----------------------------------------------------------------------
     # Proxy (best-effort for QtWebEngine via Chromium flags)
@@ -611,45 +615,63 @@ class SettingsManager:
 
         return profile
 
+    # settings.py
     def _install_request_interceptor(self, profile: QWebEngineProfile) -> None:
         """
-        Try existing RequestInterceptor implementations:
-        1) RequestInterceptor(self)  -> full SettingsManager access (preferred)
-        2) RequestInterceptor(headers_dict) -> static headers only
+        Install our HeaderInterceptor so Accept-Language / DNT / custom headers are sent.
         """
         try:
-            from .request_interceptor import RequestInterceptor  # your implemented interceptor
+            # Your class is named HeaderInterceptor, not RequestInterceptor
+            from .request_interceptor import HeaderInterceptor  # <- correct class
         except Exception:
             return
 
-        # Build a static header baseline (used if ctor wants dict):
-        baseline_headers: Dict[str, str] = {}
-        # Accept-Language (if not empty)
-        if self.settings.get("accept_language"):
-            baseline_headers["Accept-Language"] = self.settings["accept_language"]
-        # DNT
-        if self.settings.get("send_dnt", False):
-            baseline_headers["DNT"] = "1"
-        # Global headers
-        for k, v in (self.settings.get("headers_global") or {}).items():
-            baseline_headers[str(k)] = str(v)
-
-        # Optional: spoof a minimal set of UA Client Hints (many servers ignore if UA not matching)
-        if self.settings.get("spoof_chrome_client_hints", False):
-            # Very basic, static hints — your interceptor can refine per-platform
-            baseline_headers.setdefault("Sec-CH-UA", '"Chromium";v="120", "Not.A/Brand";v="24"')
-            baseline_headers.setdefault("Sec-CH-UA-Platform", '"Windows"')
-            baseline_headers.setdefault("Sec-CH-UA-Mobile", "?0")
-
-        # Try constructor with SettingsManager first (most powerful)
-        interceptor = None
+        # Create and attach
         try:
-            interceptor = RequestInterceptor(self)  # type: ignore[arg-type]
+            interceptor = HeaderInterceptor(self)  # pass SettingsManager
+            profile.setUrlRequestInterceptor(interceptor)
         except Exception:
-            try:
-                interceptor = RequestInterceptor(baseline_headers)  # type: ignore[arg-type]
-            except Exception:
-                interceptor = None
+            pass
+
+    # def _install_request_interceptor(self, profile: QWebEngineProfile) -> None:
+    #     """
+    #     Try existing RequestInterceptor implementations:
+    #     1) RequestInterceptor(self)  -> full SettingsManager access (preferred)
+    #     2) RequestInterceptor(headers_dict) -> static headers only
+    #     """
+    #     try:
+    #         from .request_interceptor import RequestInterceptor  # your implemented interceptor
+    #     except Exception:
+    #         return
+
+    #     # Build a static header baseline (used if ctor wants dict):
+    #     baseline_headers: Dict[str, str] = {}
+    #     # Accept-Language (if not empty)
+    #     if self.settings.get("accept_language"):
+    #         baseline_headers["Accept-Language"] = self.settings["accept_language"]
+    #     # DNT
+    #     if self.settings.get("send_dnt", False):
+    #         baseline_headers["DNT"] = "1"
+    #     # Global headers
+    #     for k, v in (self.settings.get("headers_global") or {}).items():
+    #         baseline_headers[str(k)] = str(v)
+
+    #     # Optional: spoof a minimal set of UA Client Hints (many servers ignore if UA not matching)
+    #     if self.settings.get("spoof_chrome_client_hints", False):
+    #         # Very basic, static hints — your interceptor can refine per-platform
+    #         baseline_headers.setdefault("Sec-CH-UA", '"Chromium";v="120", "Not.A/Brand";v="24"')
+    #         baseline_headers.setdefault("Sec-CH-UA-Platform", '"Windows"')
+    #         baseline_headers.setdefault("Sec-CH-UA-Mobile", "?0")
+
+    #     # Try constructor with SettingsManager first (most powerful)
+    #     interceptor = None
+    #     try:
+    #         interceptor = RequestInterceptor(self)  # type: ignore[arg-type]
+    #     except Exception:
+    #         try:
+    #             interceptor = RequestInterceptor(baseline_headers)  # type: ignore[arg-type]
+    #         except Exception:
+    #             interceptor = None
 
         if interceptor is not None:
             try:

@@ -1,5 +1,6 @@
 # qwsengine/browser_operations.py
 
+import json
 from pathlib import Path
 from datetime import datetime
 from typing import Callable, Optional
@@ -466,13 +467,15 @@ class BrowserOperations:
             if not ok:
                 self._fps_fail("Failed to save stitched image.")
             else:
+                # Scroll back to top after full page capture
+                if self._fps_tab and hasattr(self._fps_tab, "view") and self._fps_tab.view:
+                    self._fps_tab.view.page().runJavaScript("window.scrollTo(0, 0);")
                 self.status_callback(f"Saved Full Page → {self._fps_target}", level="INFO")
                 self._log_system_event("browser_operations", "Full page screenshot saved", str(self._fps_target))
         except Exception as e:
             self._fps_fail(f"Save error: {e}")
         finally:
             self._fps_reset()
-    
     def _fps_fail(self, msg: str):
         """Handle full-page screenshot failure"""
         self.status_callback(msg, level="ERROR")
@@ -503,7 +506,7 @@ class BrowserOperations:
         
         self.is_browser_ready(tab=tab, callback=do_execute)
     
-    def get_page_content(self, tab, callback):
+    def get_page_content(self, tab, callback):        
         """
         Get HTML content of current page.
         
@@ -515,3 +518,197 @@ class BrowserOperations:
             view.page().toHtml(callback)
         
         self.is_browser_ready(tab=tab, callback=do_get_content)
+
+
+    def extract_images(self, tab=None, save_dir=None, filename_prefix=""):
+        """
+        Extract and save all images from the current page.
+    
+        Args:
+            tab: Tab widget
+            save_dir: Directory to save to
+            filename_prefix: Optional prefix for filename
+        """
+
+        def do_extract_images(view):
+            try:
+                # Determine save directory
+                if save_dir is None:
+                    if self.settings_manager:
+                        target_dir = self.settings_manager.config_dir / "save" / "images"
+                    else:
+                        target_dir = Path.cwd() / "images"
+                else:
+                    target_dir = Path(save_dir) / "images"
+                
+                target_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Generate base filename
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                host = view.url().host() or "page"
+                safe_host = "".join(
+                    ch for ch in host if ch.isalnum() or ch in ("-", "_")
+                ).strip() or "page"
+                
+                if filename_prefix:
+                    base_filename = f"{filename_prefix}_{ts}_{safe_host}"
+                else:
+                    base_filename = f"{ts}_{safe_host}"
+                
+                # JavaScript to get all image URLs from the page
+                script = """
+                (function() {
+                    let images = [];
+                    const imgElements = document.querySelectorAll('img');
+                    
+                    imgElements.forEach((img, index) => {
+                        if (img.src) {
+                            let src = img.src;
+                            // Skip data URLs for efficiency
+                            if (!src.startsWith('data:')) {
+                                images.push({
+                                    index: index,
+                                    src: src,
+                                    alt: img.alt || '',
+                                    width: img.width,
+                                    height: img.height
+                                });
+                            }
+                        }
+                    });
+                    
+                    return images;
+                })();
+                """
+                
+                # Execute JavaScript to get image URLs
+                def process_images(images_data):
+                    if not images_data:
+                        self.status_callback("No images found on page.", level="WARNING")
+                        return
+                    
+                    # Log info
+                    self.status_callback(f"Found {len(images_data)} images on page.", level="INFO")
+                    self._log_system_event("browser_operations", f"Extracting {len(images_data)} images", 
+                                        f"from {view.url().toString()}")
+                    
+                    # Create a manifest file for images
+                    manifest_path = target_dir / f"{base_filename}_manifest.json"
+                    
+                    total_saved = 0
+                    saved_images = []
+                    
+                    # Process each image
+                    for img in images_data:
+                        try:
+                            img_url = img['src']
+                            if not img_url:
+                                continue
+                                
+                            # Normalize URL (handle relative URLs)
+                            if not img_url.startswith(('http://', 'https://')):
+                                base_url = view.url().toString()
+                                if img_url.startswith('/'):
+                                    # Absolute path relative to domain
+                                    parts = base_url.split('://', 1)
+                                    if len(parts) > 1:
+                                        protocol, rest = parts
+                                        domain = rest.split('/', 1)[0]
+                                        img_url = f"{protocol}://{domain}{img_url}"
+                                else:
+                                    # Relative path
+                                    base_path = '/'.join(base_url.split('/')[:-1]) + '/'
+                                    img_url = f"{base_path}{img_url}"
+                            
+                            # Create a safe filename
+                            img_filename = f"{base_filename}_{img['index']:03d}.png"
+                            img_path = target_dir / img_filename
+                            
+                            # Save image info
+                            img_info = {
+                                'index': img['index'],
+                                'original_url': img['src'],
+                                'resolved_url': img_url,
+                                'alt_text': img['alt'],
+                                'width': img['width'],
+                                'height': img['height'],
+                                'saved_as': img_filename
+                            }
+                            saved_images.append(img_info)
+                            
+                            # Download the image using the page's network access
+                            download_script = f"""
+                            (function() {{
+                                return new Promise((resolve, reject) => {{
+                                    const img = new Image();
+                                    img.crossOrigin = "Anonymous";
+                                    img.onload = function() {{
+                                        const canvas = document.createElement('canvas');
+                                        canvas.width = img.width;
+                                        canvas.height = img.height;
+                                        const ctx = canvas.getContext('2d');
+                                        ctx.drawImage(img, 0, 0);
+                                        resolve(canvas.toDataURL('image/png'));
+                                    }};
+                                    img.onerror = function() {{
+                                        reject('Failed to load image');
+                                    }};
+                                    img.src = "{img_url}";
+                                }});
+                            }})();
+                            """
+                            
+                            def save_image_data(data_url):
+                                nonlocal total_saved
+                                try:
+                                    if not data_url or not isinstance(data_url, str) or not data_url.startswith('data:image'):
+                                        return
+                                    
+                                    # Extract base64 data
+                                    import base64
+                                    header, encoded = data_url.split(",", 1)
+                                    decoded = base64.b64decode(encoded)
+                                    
+                                    # Save to file
+                                    with open(img_path, 'wb') as f:
+                                        f.write(decoded)
+                                    
+                                    total_saved += 1
+                                    self.status_callback(f"Saved image {total_saved}/{len(images_data)}", level="INFO")
+                                    
+                                    # If all images are processed, write the manifest
+                                    if total_saved == len(saved_images):
+                                        import json
+                                        with open(manifest_path, 'w') as f:
+                                            json.dump({
+                                                'url': view.url().toString(),
+                                                'title': view.title(),
+                                                'timestamp': datetime.now().isoformat(),
+                                                'total_images': len(saved_images),
+                                                'images': saved_images
+                                            }, f, indent=2)
+                                        
+                                        self.status_callback(f"Saved {total_saved} images to {target_dir}", level="INFO")
+                                        self._log_system_event("browser_operations", "Images extracted", 
+                                                            f"Saved {total_saved} images to {target_dir}")
+                                except Exception as e:
+                                    self.status_callback(f"Error saving image: {e}", level="ERROR")
+                            
+                            # Execute the download script for each image
+                            view.page().runJavaScript(download_script, save_image_data)
+                            
+                        except Exception as e:
+                            self.status_callback(f"Error processing image {img['index']}: {e}", level="ERROR")
+                    
+                    # If no images were processed, show a message
+                    if not saved_images:
+                        self.status_callback("No valid images found to extract.", level="WARNING")
+                
+                # Execute the script to get image URLs
+                view.page().runJavaScript(script, process_images)
+                
+            except Exception as e:
+                self.status_callback(f"Image extraction failed: {e}", level="ERROR")
+                self._log_error("browser_operations", f"Image extraction failed: {e}")
+        
+        self.is_browser_ready(tab=tab, callback=do_extract_images)

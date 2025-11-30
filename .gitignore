@@ -57,3 +57,9 @@ zips/
 *.deb
 *.rpm
 "@ | Set-Content ".gitignore" -Encoding utf8
+
+
+*.zip
+
+multilist/*
+docs/not to use/*

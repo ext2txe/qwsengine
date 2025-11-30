@@ -1,21 +1,24 @@
-from pathlib import Path
 from PySide6.QtWidgets import QWidget, QVBoxLayout
-from PySide6.QtWebEngineCore import QWebEnginePage
+from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
 from PySide6.QtCore import Signal
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
+
 class WebView(QWebEngineView):
-    """Catch new-window requests and ask the main window to create a tab."""
-    def __init__(self, parent=None, on_create_window=None):
+    def __init__(self, parent=None, *, profile: QWebEngineProfile | None = None, on_create_window=None):
         super().__init__(parent)
         self._on_create_window = on_create_window
+        if profile is not None:
+            # Ensure this view uses the given profile
+            page = QWebEnginePage(profile, self)
+            self.setPage(page)
 
     def createWindow(self, _type: QWebEnginePage.WebWindowType) -> QWebEngineView:
         if callable(self._on_create_window):
-            # Main window will create the tab and return its view
+            # hand back a *fresh* view from a brand-new tab; caller supplies profile
             return self._on_create_window()
-        # Fallback: a temporary view (shouldn’t be used in normal flow)
-        return WebView(self, on_create_window=self._on_create_window)
+        # Fallback: temporary view (shouldn’t happen in normal flow)
+        return WebView(self, profile=self.page().profile(), on_create_window=self._on_create_window)
 
 
 class BrowserTab(QWidget):
@@ -32,7 +35,9 @@ class BrowserTab(QWidget):
         self.settings_manager = settings_manager
 
         # REPLACE your existing view creation line with this:
-        self.view = WebView(self, on_create_window=on_create_window)
+        prof = profile or getattr(self.settings_manager, "profile", None)
+        self.view = WebView(self, profile=profile, on_create_window=on_create_window)
+        self.browser = self.view   # keep legacy attribute alive
 
         # keep your existing layout code; e.g.:
         layout = QVBoxLayout(self)

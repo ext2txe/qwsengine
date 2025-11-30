@@ -35,7 +35,8 @@ def app_dir(kind: QStandardPaths.StandardLocation) -> Path:
     return path
 
 # Commonly used paths
-SETTINGS_PATH = app_dir(QStandardPaths.AppConfigLocation) / "settings.json"
+APP_BASE_PATH = app_dir(QStandardPaths. AppLocalDataLocation)
+SETTINGS_PATH = app_dir(QStandardPaths.AppLocalDataLocation) / "settings.json"
 CACHE_DIR     = app_dir(QStandardPaths.CacheLocation)
 DATA_DIR      = app_dir(QStandardPaths.AppDataLocation)
 LOG_DIR       = app_dir(QStandardPaths.AppConfigLocation) / "log"
