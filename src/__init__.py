@@ -1,4 +1,4 @@
-__version__ = "0.4.30"
+#__version__ = "0.4.30"# 2025-12-8   versioub uses /src/qwsengine/__init__.py 
 
 __all__ = [
     "settings",
