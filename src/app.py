@@ -32,13 +32,13 @@ def main():
     except:
         pass  # Icon optional
     
-    # Create main browser window
-    browser_window = BrowserWindow()
-    browser_window.show()
-    browser_window.settings_manager.log_system_event("App", "Application fully loaded and visible")
+    ## Create main browser window
+    #browser_window = BrowserWindow()
+    #browser_window.show()
+    #browser_window.settings_manager.log_system_event("App", "Application fully loaded and visible")
     
     # Create controller window and ensure it connects properly
-    controller_window = BrowserControllerWindow(browser_window)
+    controller_window = BrowserControllerWindow()
     
     # Delay showing controller slightly to ensure browser is fully initialized
     def show_controller():

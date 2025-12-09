@@ -55,6 +55,9 @@ class BrowserWindow(QMainWindow):
     def __init__(self, settings_manager=None, parent: Optional[QWidget] = None):
         super().__init__(parent)
 
+        if False :
+            return
+
         # Wrap provided settings manager (can be None) with a safe shim
         #self.settings_manager = _SafeSettings(settings_manager)
         self.settings_manager = SettingsManager()
@@ -100,6 +103,10 @@ class BrowserWindow(QMainWindow):
 
         # Populate the combo at startup
         self._load_script_list()
+
+        #
+
+        return
      
     def configure_profile(profile: QWebEngineProfile):
         cache = app_dir(QStandardPaths.CacheLocation) / "web"
@@ -139,6 +146,9 @@ class BrowserWindow(QMainWindow):
         vbox.addWidget(self.status_bar)
 
         self._restore_window_state()
+
+        #install handlers
+        #self.tab_manager.install_handlers()
 
         # Initial tab
         self.tab_manager.create_initial_tab()
@@ -844,6 +854,6 @@ if __name__ == "__main__":  # pragma: no cover
     import sys
 
     app = QApplication(sys.argv)
-    win = BrowserWindow()
+    #win = BrowserWindow()
     win.show()
     sys.exit(app.exec())
