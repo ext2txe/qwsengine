@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Optional, Union
 if TYPE_CHECKING:
     from ..main_window import BrowserWindow
 
-from ..browser_tab import BrowserTab
+from .browser_tab import BrowserTab
 
 
 class TabManager:

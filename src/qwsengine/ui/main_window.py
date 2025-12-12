@@ -27,19 +27,19 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineProfile
-from .app_info import APP_VERSION, LOG_DIR
+from qwsengine.app_info import APP_VERSION, LOG_DIR
+from .menu_builder import MenuBuilder
+from .toolbar_builder import ToolbarBuilder
+from .tab_manager import TabManager
 
-from .ui.menu_builder import MenuBuilder
-from .ui.toolbar_builder import ToolbarBuilder
-from .ui.tab_manager import TabManager
 
 # Import your tab widget (your traceback shows browser_tab.py)
 from .browser_tab import BrowserTab
-from .settings import SettingsManager
+from qwsengine.core.settings import SettingsManager
 from .settings_dialog import SettingsDialog
-from qwsengine.about_dialog import AboutDialog
+from qwsengine.ui.about_dialog import AboutDialog
 from .browser_operations import BrowserOperations  # NEW IMPORT
-from .log_manager import LogManager
+from qwsengine.core.log_manager import LogManager
 
 class BrowserWindow(QMainWindow):
     """
@@ -52,24 +52,25 @@ class BrowserWindow(QMainWindow):
       - Optional legacy newTabRequested(QUrl) routed to open_url_in_new_tab()
     """
 
-    def __init__(self, settings_manager=None, parent: Optional[QWidget] = None):
+    def __init__(
+        self,
+        ctx: AppContext | None = None,
+        settings_manager: SettingsManager | None = None,
+        parent=None,
+    ):
         super().__init__(parent)
 
-        if False :
-            return
+        self.ctx = ctx
 
-        # Wrap provided settings manager (can be None) with a safe shim
-        #self.settings_manager = _SafeSettings(settings_manager)
-        self.settings_manager = SettingsManager()
-
-        # Initialize log manager
-        self.log_manager = None
-        if self.settings_manager and hasattr(self.settings_manager, "config_dir"):
-            self.log_manager = LogManager(
-                config_dir=self.settings_manager.config_dir,
-                app_name="qwsEngine"
-            )
-
+        # decide which settings_manager to use
+        if settings_manager is not None:
+            self.settings_manager = settings_manager
+        elif ctx is not None and getattr(ctx, "settings_manager", None) is not None:
+            self.settings_manager = ctx.settings_manager
+        else:
+            # last-resort fallback so the window can still be created
+            self.settings_manager = SettingsManager()
+            
         #from .ui.menu_builder import MenuBuilder
         self.menu_builder = MenuBuilder(self)
         self.toolbar_builder = ToolbarBuilder(self)

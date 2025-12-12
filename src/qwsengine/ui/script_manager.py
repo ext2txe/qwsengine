@@ -15,7 +15,7 @@ from PySide6.QtCore import QObject, Signal, QTimer, QUrl
 from PySide6.QtWidgets import QWidget, QMessageBox
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
-from .log_manager import LogManager
+from qwsengine.core.log_manager import LogManager
 
 
 class ScriptAction:

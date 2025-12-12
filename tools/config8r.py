@@ -20,7 +20,8 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineSettings
 
 from lxml import html as lxml_html, etree
-from scopes import HtmlDoc
+from .scopes import HtmlDoc
+from .processors import run_pipeline
 
 
 # ---------------- Helper functions (adapted from poc_v0) ----------------

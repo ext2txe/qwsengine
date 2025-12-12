@@ -60,7 +60,7 @@ class SettingsManager:
             "window_normal_rect": None,   # [x, y, w, h]
 
             "user_agent": "",             # empty = use default UA
-            "proxy_mode": "system",       # "system" | "manual" | "none"
+            "proxy_mode": "manual",       # "system" | "manual" | "none"
             "proxy_type": "http",         # "http" | "socks5" (manual only)
             "proxy_host": "",
             "proxy_port": 0,

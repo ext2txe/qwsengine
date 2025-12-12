@@ -1,87 +1,79 @@
 import sys
-import os
-from pathlib import Path
+
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QIcon
-from PySide6.QtCore import QTimer
+
 from qwsengine.app_info import APP_ID
+from qwsengine.ui import resources_rc  # noqa: F401  - ensure Qt resources are registered
 
-# Import the QResource system to ensure resources are available
-from qwsengine import resources_rc
-
-from qwsengine.main_window import BrowserWindow
-from qwsengine.controller_window import BrowserControllerWindow
-from qwsengine.settings import SettingsManager
+from qwsengine.core import AppContext          # <-- comes from the new minimal core/__init__.py
+from qwsengine.core.settings import SettingsManager
+from qwsengine.ui.main_window import BrowserWindow
+from qwsengine.ui.controller_window import BrowserControllerWindow
 
 
-def main():
+def main() -> None:
+    """Application entry point."""
     app = QApplication(sys.argv)
-    
-    # Configure app identity from single source of truth
-    
-    # Optional: Windows taskbar grouping
+
+    # Optional: Windows taskbar grouping + app identity
     try:
         import ctypes
+
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
     except Exception:
+        # Non-Windows or failure – just ignore
         pass
-    
-    # Set icon - using resource prefix from app_info
+
+    # Set main application icon from Qt resources (":/qws" prefix comes from resources_rc)
     try:
-        app.setWindowIcon(QIcon(f"{RESOURCE_PREFIX}/icons/logo.ico"))
-    except:
-        pass  # Icon optional
-    
-    ## Create main browser window
-    #browser_window = BrowserWindow()
-    #browser_window.show()
-    #browser_window.settings_manager.log_system_event("App", "Application fully loaded and visible")
-    
-    # Create controller window and ensure it connects properly
-    controller_window = BrowserControllerWindow()
-    
-    # Delay showing controller slightly to ensure browser is fully initialized
-    def show_controller():
-        controller_window.show()
-        controller_window.raise_()
-        controller_window.activateWindow()
-        # Force update status after connection
-        controller_window.update_status("Connected to browser - Ready")
-        browser_window.settings_manager.log_system_event("App", "Controller window launched")
-    
-    # Show controller after a brief delay
-    QTimer.singleShot(100, show_controller)
-    # Set icon
-  # The resource prefix is ":/qws" based on your app_info.py
-    app.setWindowIcon(QIcon(":/qws/icons/logo.ico"))
-    
-    # Create settings manager first
-    settings_manager = SettingsManager()
-    
-    # Create and show controller window first
-    controller_window = BrowserControllerWindow(parent=None, settings_manager=settings_manager)
+        app.setWindowIcon(QIcon(":/qws/icons/logo.ico"))
+    except Exception:
+        # Icon is nice to have but not critical
+        pass
+
+    # --- new context wiring ---
+    ctx = AppContext.create(qt_app=app)
+    settings_manager = ctx.settings_manager
+
+    controller_window = BrowserControllerWindow(
+        parent=None,
+        settings_manager=settings_manager,
+    )
+    controller_window.show()
+
+    controller_window = BrowserControllerWindow(
+        parent=None,
+        settings_manager=settings_manager,
+    )
     controller_window.show()
     controller_window.update_status("Controller ready")
-    
-    # Check if browser should auto-launch
+
+    # Optionally auto-launch the browser window based on settings
     should_auto_launch_browser = settings_manager.get("auto_launch_browser", True)
-    
-    # If auto-launch is enabled, create and show the browser window
+
     browser_window = None
     if should_auto_launch_browser:
-        browser_window = BrowserWindow(settings_manager=settings_manager)
+        # browser window – NOTE: ctx is passed in now
+        browser_window = BrowserWindow(
+            ctx=ctx,
+            settings_manager=settings_manager,
+        )
         browser_window.show()
-        settings_manager.log_system_event("App", "Application fully loaded and visible")
-        
-        # Connect controller to browser
+        # Wire controller to browser
         controller_window.browser_window = browser_window
         controller_window.update_status("Connected to browser - Ready")
-    
+
+    # --- Event loop + crash logging -----------------------------------------
     try:
         sys.exit(app.exec())
     except Exception as e:
-        if hasattr(browser_window, 'settings_manager'):
-            browser_window.settings_manager.log_error("App", f"Application crashed: {str(e)}")
+        # Best-effort logging – don’t crash if logging fails
+        try:
+            if browser_window is not None and hasattr(browser_window, "settings_manager"):
+                browser_window.settings_manager.log_error("App", f"Application crashed: {e}")
+        except Exception:
+            pass
         raise
 
 

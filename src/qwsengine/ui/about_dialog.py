@@ -11,10 +11,10 @@ from PySide6.QtWidgets import QDialog, QDialogButtonBox, QLabel, QHBoxLayout, QV
 from PySide6.QtWebEngineCore import QWebEngineProfile
 
 # NEW: import shared app info (single source of truth)
-from .app_info import APP_NAME, APP_VERSION, SETTINGS_PATH, RESOURCE_PREFIX
+from qwsengine.app_info import APP_NAME, APP_VERSION, SETTINGS_PATH, RESOURCE_PREFIX
 
 try:
-    from .settings import SettingsManager  # only to read current settings cleanly
+    from qwsengine.core.settings import SettingsManager  # only to read current settings cleanly
     def load_settings(): return SettingsManager().settings
 except Exception:
     def load_settings(): return {}

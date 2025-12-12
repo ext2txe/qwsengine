@@ -1,4 +1,4 @@
-# qwsengine/controller_window.py
+# qwsengine/ui/controller_window.py
 from __future__ import annotations
 
 # Qt
@@ -11,13 +11,13 @@ from PySide6.QtWidgets import (
 
 # Project
 try:
-    from .app_info import APP_VERSION, APP_NAME
+    from qwsengine.app_info import APP_VERSION, APP_NAME
 except Exception:
     APP_VERSION = "dev"
     APP_NAME = "QWSEngine"
 
 from .settings_dialog import SettingsDialog
-from .settings import SettingsManager
+from qwsengine.core.settings import SettingsManager
 from .browser_operations import BrowserOperations  # NEW IMPORT
 
 class BrowserControllerWindow(QMainWindow):
@@ -280,16 +280,18 @@ class BrowserControllerWindow(QMainWindow):
 
         # Get full module path to ensure proper imports
         from importlib import import_module
+
+        BrowserWindow = None
         try:
-            # Try direct import
-            from ..qwsengine.main_window import BrowserWindow
-        except (ImportError, ValueError):
+            # Preferred: new UI location
+            from qwsengine.ui.main_window import BrowserWindow
+        except ImportError:
             try:
-                # Try absolute import
+                # Backwards-compat: legacy location, if it still exists
                 from qwsengine.main_window import BrowserWindow
             except ImportError:
-                # Last resort: dynamic import
-                mod = import_module("qwsengine.main_window")
+                # Last resort: dynamic import from UI module
+                mod = import_module("qwsengine.ui.main_window")
                 BrowserWindow = getattr(mod, "BrowserWindow")
 
         try:
@@ -297,13 +299,53 @@ class BrowserControllerWindow(QMainWindow):
             self.browser_window = BrowserWindow(settings_manager=self.settings_manager)
             self.browser_window.show()
             self.update_status("Browser window launched")
-            
+
             # Start auto-reload timer if enabled
             self._update_auto_reload_state()
-            
+
         except Exception as e:
             self.update_status(f"Failed to launch browser: {e}", level="ERROR")
             self.log_command(f"Launch browser error: {e}")
+
+
+    # def launch_browser(self):
+    #     """Launch a new browser window."""
+    #     if getattr(self, "browser_window", None):
+    #         if self.browser_window.isVisible():
+    #             self.update_status("Browser window already open")
+    #             self.browser_window.activateWindow()  # Bring to front
+    #             return
+    #         # Otherwise it exists but is hidden; show it again
+    #         self.browser_window.show()
+    #         self.update_status("Browser window restored")
+    #         return
+
+    #     # Get full module path to ensure proper imports
+    #     from importlib import import_module
+    #     try:
+    #         # Try direct import
+    #         from ..qwsengine.main_window import BrowserWindow
+    #     except (ImportError, ValueError):
+    #         try:
+    #             # Try absolute import
+    #             from qwsengine.main_window import BrowserWindow
+    #         except ImportError:
+    #             # Last resort: dynamic import
+    #             mod = import_module("qwsengine.main_window")
+    #             BrowserWindow = getattr(mod, "BrowserWindow")
+
+    #     try:
+    #         # Create new browser window with our settings
+    #         self.browser_window = BrowserWindow(settings_manager=self.settings_manager)
+    #         self.browser_window.show()
+    #         self.update_status("Browser window launched")
+            
+    #         # Start auto-reload timer if enabled
+    #         self._update_auto_reload_state()
+            
+    #     except Exception as e:
+    #         self.update_status(f"Failed to launch browser: {e}", level="ERROR")
+    #         self.log_command(f"Launch browser error: {e}")
 
     def create_browser_launch_settings(self):
         """Create browser launch settings"""
@@ -1249,7 +1291,7 @@ class BrowserControllerWindow(QMainWindow):
                 p = self.settings_manager.settings_path  # Path
             else:
                 # Fallback to show where it would be
-                from .settings import SettingsManager
+                from qwsengine.core.settings import SettingsManager
                 p = SettingsManager().settings_path
             self.settings_path_label.setText(f"settings.json: {str(p.resolve())}")
         except Exception:
@@ -1261,7 +1303,7 @@ class BrowserControllerWindow(QMainWindow):
         try:
             if not getattr(self, "settings_manager", None):
                 # Fallback so the dialog can still open even if launched standalone
-                from .settings import SettingsManager
+                from qwsengine.core.settings import SettingsManager
                 self.settings_manager = SettingsManager()
 
             dlg = SettingsDialog(self, self.settings_manager)

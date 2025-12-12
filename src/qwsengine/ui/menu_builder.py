@@ -4,7 +4,7 @@ from PySide6.QtGui import QAction, QKeySequence
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..main_window import BrowserWindow
+    from .main_window import BrowserWindow
 
 class MenuBuilder:
     """
