@@ -42,11 +42,11 @@ def main() -> None:
     )
     controller_window.show()
 
-    controller_window = BrowserControllerWindow(
-        parent=None,
-        settings_manager=settings_manager,
-    )
-    controller_window.show()
+    # controller_window = BrowserControllerWindow(
+    #     parent=None,
+    #     settings_manager=settings_manager,
+    # )
+    # controller_window.show()
     controller_window.update_status("Controller ready")
 
     # Optionally auto-launch the browser window based on settings
