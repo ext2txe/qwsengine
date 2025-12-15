@@ -16,7 +16,7 @@ class BrowserOperations:
     Handles screenshots, HTML saving, full-page captures, and page readiness checks.
     """
     
-    def __init__(self, settings_manager=None, status_callback=None):
+    def __init__(self, settings_manager=None, status_callback=None, command_callback=None):
         """
         Args:
             settings_manager: Settings manager instance (optional)
@@ -25,6 +25,9 @@ class BrowserOperations:
         """
         self.settings_manager = settings_manager
         self.status_callback = status_callback or self._default_status
+        # Optional callback for logging to a "command log" UI (Controller window)
+        # Signature: callback(message: str)
+        self.command_callback = command_callback
         
         # State for full-page screenshots
         self._fps_busy = False
@@ -207,6 +210,12 @@ class BrowserOperations:
                     try:
                         target.write_text(html, encoding="utf-8")
                         self.status_callback(f"Saved HTML → {target}", level="INFO")
+                        if self.command_callback:
+                            # Mirror to controller "Command Log" if available
+                            try:
+                                self.command_callback(f"Saved HTML → {target}")
+                            except Exception:
+                                pass
                         self._log_system_event("browser_operations", "HTML saved", str(target))
                     except Exception as e:
                         self.status_callback(f"Failed to write HTML: {e}", level="ERROR")

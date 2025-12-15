@@ -1,4 +1,4 @@
-# qwsengine/ui/controller_window.py
+# qwsengine/ui/browser_controller_window.py
 from __future__ import annotations
 
 # Qt
@@ -8,6 +8,10 @@ from PySide6.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QGroupBox, QTabWidget,
     QSpinBox, QCheckBox, QStatusBar, QTextEdit, QComboBox
 )
+
+# WebEngine
+from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
 
 # Project
 try:
@@ -36,7 +40,8 @@ class BrowserControllerWindow(QMainWindow):
         # NEW: Initialize browser operations utility
         self.browser_ops = BrowserOperations(
             settings_manager=self.settings_manager,
-            status_callback=self.update_status
+            status_callback=self.update_status,
+            command_callback=self.log_command
         )
 
         self.auto_reload_timer = QTimer()
@@ -307,45 +312,6 @@ class BrowserControllerWindow(QMainWindow):
             self.update_status(f"Failed to launch browser: {e}", level="ERROR")
             self.log_command(f"Launch browser error: {e}")
 
-
-    # def launch_browser(self):
-    #     """Launch a new browser window."""
-    #     if getattr(self, "browser_window", None):
-    #         if self.browser_window.isVisible():
-    #             self.update_status("Browser window already open")
-    #             self.browser_window.activateWindow()  # Bring to front
-    #             return
-    #         # Otherwise it exists but is hidden; show it again
-    #         self.browser_window.show()
-    #         self.update_status("Browser window restored")
-    #         return
-
-    #     # Get full module path to ensure proper imports
-    #     from importlib import import_module
-    #     try:
-    #         # Try direct import
-    #         from ..qwsengine.main_window import BrowserWindow
-    #     except (ImportError, ValueError):
-    #         try:
-    #             # Try absolute import
-    #             from qwsengine.main_window import BrowserWindow
-    #         except ImportError:
-    #             # Last resort: dynamic import
-    #             mod = import_module("qwsengine.main_window")
-    #             BrowserWindow = getattr(mod, "BrowserWindow")
-
-    #     try:
-    #         # Create new browser window with our settings
-    #         self.browser_window = BrowserWindow(settings_manager=self.settings_manager)
-    #         self.browser_window.show()
-    #         self.update_status("Browser window launched")
-            
-    #         # Start auto-reload timer if enabled
-    #         self._update_auto_reload_state()
-            
-    #     except Exception as e:
-    #         self.update_status(f"Failed to launch browser: {e}", level="ERROR")
-    #         self.log_command(f"Launch browser error: {e}")
 
     def create_browser_launch_settings(self):
         """Create browser launch settings"""
@@ -844,81 +810,57 @@ class BrowserControllerWindow(QMainWindow):
     def on_open_dev_tools(self):
         """Open developer tools for current tab."""
         try:
-            if not self.browser_window:
+            if not self._resolve_main_window():
+                self.update_status("Browser window not available", level="WARNING")
                 return
-                    
-            # Get current tab's browser view
-            tab = self.browser_window.tab_manager.get_current_tab()
-            if not tab or not hasattr(tab, "view") or not tab.view:
+
+            tab = self._get_current_tab()
+            if not tab:
                 self.update_status("No active tab available", level="WARNING")
                 return
-                
-            # Try different methods to open DevTools
-            view = tab.view
+
+            view = getattr(tab, "view", None) or getattr(tab, "browser", None)
+            if view is None:
+                self.update_status("No browser view found on current tab", level="ERROR")
+                return
+
             page = view.page()
-            
-            # # Method 1: Using triggerAction (most common)
-            # if hasattr(page, "triggerAction"):
-            #     from PySide6.QtWebEngineCore import QWebEnginePage
-            #     # Try with WebInspector action first (newer versions)
-            #     try:
-            #         page.triggerAction(QWebEnginePage.WebInspector)
-            #         self.log_command("Open DevTools (WebInspector)")
-            #         self.update_status("Developer tools opened")
-            #         return
-            #     except Exception:
-            #         # Fall back to InspectElement
-            #         try:
-            #             page.triggerAction(QWebEnginePage.InspectElement)
-            #             self.log_command("Open DevTools (InspectElement)")
-            #             self.update_status("Developer tools opened")
-            #             return
-            #         except Exception:
-            #             pass
-            
-            # Method 2: Using settings to enable devtools and F12 key simulation
+
+            # Ensure devtools are enabled for the inspected page
             try:
-                # Enable inspector
-                settings = page.settings()
-                settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
-                settings.setAttribute(QWebEngineSettings.WebAttribute.DeveloperExtrasEnabled, True)
-                
-                # Try to simulate F12 key
-                from PySide6.QtCore import Qt
-                from PySide6.QtGui import QKeyEvent
-                key_press = QKeyEvent(QEvent.KeyPress, Qt.Key_F12, Qt.NoModifier)
-                key_release = QKeyEvent(QEvent.KeyRelease, Qt.Key_F12, Qt.NoModifier)
-                
-                # Send key events
-                QApplication.sendEvent(view, key_press)
-                QApplication.sendEvent(view, key_release)
-                
-                self.log_command("Open DevTools (F12)")
-                self.update_status("Developer tools opened (F12)")
-                return
+                page.settings().setAttribute(QWebEngineSettings.WebAttribute.DeveloperExtrasEnabled, True)
             except Exception:
                 pass
-            
-            # Method 3: JavaScript method (last resort)
+
+            # Create / reuse a dedicated DevTools window
+            if not hasattr(self, "_devtools_window") or self._devtools_window is None:
+                self._devtools_window = QMainWindow(self)
+                self._devtools_window.setWindowTitle("DevTools")
+                self._devtools_window.resize(1100, 700)
+
+                self._devtools_view = QWebEngineView(self._devtools_window)
+                self._devtools_window.setCentralWidget(self._devtools_view)
+
+            # Match the inspected page profile (cookies/cache/etc.)
             try:
-                # Try to open DevTools using JavaScript
-                script = """
-                if (window.open) {
-                    // This only works if DevTools is not already open
-                    window.open('about:blank', '_blank', 'nodeIntegration=1,contextIsolation=0');
-                    console.log('Attempting to open dev tools via JavaScript');
-                }
-                """
-                page.runJavaScript(script)
-                self.log_command("Open DevTools (JavaScript)")
-                self.update_status("Attempted to open developer tools via JavaScript")
-                return
+                profile = page.profile()
             except Exception:
-                pass
-            
-            self.update_status("Failed to open developer tools. Try using F12 or right-click -> Inspect", level="WARNING")
+                profile = QWebEngineProfile.defaultProfile()
+
+            devtools_page = QWebEnginePage(profile, self._devtools_view)
+            self._devtools_view.setPage(devtools_page)
+
+            # Wire devtools page to the inspected page
+            page.setDevToolsPage(self.devtools_page)
+
+            self._devtools_window.show()
+            self._devtools_window.raise_()
+            self._devtools_window.activateWindow()
+
+            self.log_command("DevTools opened")
+            self.update_status("Developer tools opened", level="INFO")
         except Exception as e:
-            self.update_status(f"Developer tools error: {e}", "ERROR")
+            self.update_status(f"Developer tools error: {e}", level="ERROR")
             
     def on_save_html(self):
         """Save the HTML of the current page"""
@@ -1320,4 +1262,4 @@ class BrowserControllerWindow(QMainWindow):
         except Exception as e:
 
             if hasattr(self, "update_status"):
-                self.update_status(f"Failed to open settings dialog: {e}")            # qwsengine/controller_window.py
+                self.update_status(f"Failed to open settings dialog: {e}")            # qwsengine/browser_controller_window.py

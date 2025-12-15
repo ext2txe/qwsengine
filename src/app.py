@@ -8,8 +8,8 @@ from qwsengine.ui import resources_rc  # noqa: F401  - ensure Qt resources are r
 
 from qwsengine.core import AppContext          # <-- comes from the new minimal core/__init__.py
 from qwsengine.core.settings import SettingsManager
-from qwsengine.ui.main_window import BrowserWindow
-from qwsengine.ui.controller_window import BrowserControllerWindow
+from qwsengine.ui.browser_window import BrowserWindow
+from qwsengine.ui.browser_controller_window import BrowserControllerWindow
 
 
 def main() -> None:
@@ -42,11 +42,6 @@ def main() -> None:
     )
     controller_window.show()
 
-    # controller_window = BrowserControllerWindow(
-    #     parent=None,
-    #     settings_manager=settings_manager,
-    # )
-    # controller_window.show()
     controller_window.update_status("Controller ready")
 
     # Optionally auto-launch the browser window based on settings
