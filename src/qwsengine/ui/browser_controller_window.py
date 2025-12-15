@@ -6,7 +6,7 @@ from PySide6.QtCore import QTimer, Qt, QSettings, QByteArray, QCoreApplication, 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QGroupBox, QTabWidget,
-    QSpinBox, QCheckBox, QStatusBar, QTextEdit, QComboBox
+    QSpinBox, QCheckBox, QStatusBar, QTextEdit, QComboBox, QFileDialog
 )
 
 # WebEngine
@@ -253,6 +253,7 @@ class BrowserControllerWindow(QMainWindow):
         script_layout = QVBoxLayout(script_tab)
         script_layout.setSpacing(10)
 
+        script_layout.addWidget(self.create_script_file_section())
         script_layout.addWidget(self.create_scripting_section())
         script_layout.addStretch(1)
         self.tab_widget.addTab(script_tab, "Scripting")
@@ -574,6 +575,43 @@ class BrowserControllerWindow(QMainWindow):
         self.log_output.setReadOnly(True)
         self.log_output.setMaximumHeight(120)
         layout.addWidget(self.log_output)
+        
+        group.setLayout(layout)
+        return group
+    
+    def create_script_file_section(self):
+        """Create script file management controls"""
+        group = QGroupBox("Scripting")
+        layout = QVBoxLayout()
+        
+        # Script file path selection
+        file_label = QLabel("Script File:")
+        layout.addWidget(file_label)
+        
+        file_layout = QHBoxLayout()
+        self.script_file_path_label = QLabel("(No file selected)")
+        self.script_file_path_label.setStyleSheet("color: gray; font-style: italic;")
+        file_layout.addWidget(self.script_file_path_label)
+        
+        select_btn = QPushButton("Select")
+        select_btn.setMaximumWidth(80)
+        select_btn.clicked.connect(self.on_select_script_file)
+        file_layout.addWidget(select_btn)
+        layout.addLayout(file_layout)
+        
+        # Script content display/edit
+        content_label = QLabel("Script Content:")
+        layout.addWidget(content_label)
+        
+        self.script_file_content = QTextEdit()
+        self.script_file_content.setPlaceholderText("Select a script file to view or edit its content")
+        self.script_file_content.setMinimumHeight(180)
+        layout.addWidget(self.script_file_content)
+        
+        # Save button
+        save_btn = QPushButton("Save")
+        save_btn.clicked.connect(self.on_save_script_content)
+        layout.addWidget(save_btn)
         
         group.setLayout(layout)
         return group
@@ -1010,6 +1048,89 @@ class BrowserControllerWindow(QMainWindow):
         self.script_result.setPlainText(result_text)
         self.update_status("Script executed")
         
+    def on_select_script_file(self):
+        """Open file dialog to select script file."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Script File",
+            "",
+            "JavaScript Files (*.js);;Text Files (*.txt);;All Files (*)"
+        )
+        
+        if file_path:
+            try:
+                # Save the file path to settings
+                if self.settings_manager:
+                    self.settings_manager.set("script_file_path", file_path, persist=True)
+                    self.update_status(f"Script file selected: {file_path}")
+                else:
+                    self.update_status("Settings manager not available", level="WARNING")
+                    return
+                
+                # Load and display the file content
+                self._load_script_file_content(file_path)
+                
+            except Exception as e:
+                self.update_status(f"Error selecting script file: {e}", level="ERROR")
+    
+    def _load_script_file_content(self, file_path):
+        """Load script file content into the editor."""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # Update UI
+            self.script_file_content.setPlainText(content)
+            self.script_file_path_label.setText(file_path)
+            self.script_file_path_label.setStyleSheet("color: black; font-style: normal;")
+            self.update_status(f"Loaded: {file_path}")
+            
+        except FileNotFoundError:
+            self.update_status(f"Script file not found: {file_path}", level="ERROR")
+            self.script_file_path_label.setText(f"(File not found: {file_path})")
+            self.script_file_path_label.setStyleSheet("color: red; font-style: italic;")
+        except Exception as e:
+            self.update_status(f"Failed to read script file: {e}", level="ERROR")
+    
+    def on_save_script_content(self):
+        """Save script content to file, backing up the original with timestamp."""
+        file_path = None
+        
+        # Get file path from label
+        label_text = self.script_file_path_label.text()
+        if label_text and not label_text.startswith("("):
+            file_path = label_text
+        
+        if not file_path:
+            self.update_status("No script file selected. Use 'Select' to choose a file.", level="WARNING")
+            return
+        
+        try:
+            # Check if file exists - if so, back it up with timestamp
+            from pathlib import Path
+            import shutil
+            from datetime import datetime
+            
+            file_path_obj = Path(file_path)
+            
+            if file_path_obj.exists():
+                # Create backup with timestamp
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                backup_path = file_path_obj.with_stem(f"{file_path_obj.stem}_backup_{timestamp}")
+                shutil.copy2(file_path, backup_path)
+                self.update_status(f"Backed up original to: {backup_path}")
+            
+            # Write new content
+            content = self.script_file_content.toPlainText()
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            
+            self.update_status(f"Script saved: {file_path}")
+            self.log_command(f"Saved script to {file_path}")
+            
+        except Exception as e:
+            self.update_status(f"Failed to save script file: {e}", level="ERROR")
+        
     # --- User Agent functions ------------------------------------------------
     def on_apply_user_agent(self):
         """Apply custom user agent."""
@@ -1184,6 +1305,11 @@ class BrowserControllerWindow(QMainWindow):
                 start_url = self.settings_manager.get("start_url", "https://www.google.com")
                 self.start_url_input.setText(start_url)
             
+            # Load script file path and content
+            if self.settings_manager:
+                script_file_path = self.settings_manager.get("script_file_path", "")
+                if script_file_path:
+                    self._load_script_file_content(script_file_path)
                 
         except Exception as e:
             self.update_status(f"Failed to load settings: {e}", "WARNING")
