@@ -1082,7 +1082,7 @@ class BrowserControllerWindow(QMainWindow):
             # Update UI
             self.script_file_content.setPlainText(content)
             self.script_file_path_label.setText(file_path)
-            self.script_file_path_label.setStyleSheet("color: black; font-style: normal;")
+            self.script_file_path_label.setStyleSheet("color: white; font-style: normal;")
             self.update_status(f"Loaded: {file_path}")
             
         except FileNotFoundError:
